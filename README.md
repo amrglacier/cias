@@ -2,6 +2,8 @@
 
 > V1.4.2-SRS-FULL-PROD | 基于 Cloudflare Workers + Supabase 的零预算量化研判系统
 
+> **完整技术文档请阅读 [TECH_DOCS.md](./TECH_DOCS.md)** — 包含架构、数据库、算法、API、部署运维、常见修改场景等全部细节，适合接手开发的工程师快速上手。
+
 ## 系统架构
 
 ```
@@ -169,25 +171,53 @@ Wr  = BaseRate + Ref_st + Err_rate
 
 ```
 cias/
+├── TECH_DOCS.md               # ← 完整技术文档（接手开发必读）
 ├── migrations/              # Supabase 数据库迁移
 │   ├── 001_initial_schema.sql
-│   └── 002_atomic_delete_function.sql
-├── src/
-│   ├── types/               # TypeScript 类型定义
-│   ├── config/              # 默认配置
+│   ├── 002_atomic_delete_function.sql
+│   └── 003_matches_and_betting_config.sql
+├── src/                     # 后端 Worker 源码
+│   ├── types/               # TypeScript 类型定义（13 个因子）
+│   ├── config/              # 默认配置 + 购彩窗口配置
 │   ├── db/                  # 数据库客户端 + Repository + Durable Objects
-│   ├── agents/              # Data Agent + Logic Agent + 核心算法
+│   ├── agents/              # Data Agent + Logic Agent + 核心算法 + API 拉取
 │   ├── system/              # 调度中心 + 宪法校验 + 熔断器
-│   ├── review/             # 复盘子系统
-│   ├── prompts/            # LLM Prompt 模板
-│   └── index.ts            # Worker 入口
+│   ├── review/             # 复盘子系统（归因 + 权重迭代）
+│   ├── prompts/            # LLM Prompt 模板（方案 B 未使用）
+│   └── index.ts            # Worker 入口（路由 + Cron）
 ├── frontend/               # Cloudflare Pages 前端
-├── test/                    # 单元测试
-├── wrangler.toml            # Cloudflare 配置
+│   ├── page.html           # ← 可编辑的 HTML 源模板
+│   ├── _worker.js          # 自动生成的 Pages Worker（勿手动编辑）
+│   └── index.html          # 旧版页面（已弃用）
+├── scripts/
+│   └── build-worker.js     # 构建脚本：page.html → _worker.js
+├── test/                    # 单元测试（45 个）
+├── wrangler.toml            # Cloudflare 配置（含 Cron）
 ├── package.json
 ├── tsconfig.json
 └── .env.example             # 环境变量模板
 ```
+
+### 两层 Worker 架构
+
+| Worker | 部署位置 | 作用 | 代码位置 |
+|:---|:---|:---|:---|
+| 后端 Worker | Cloudflare Workers | Cron + 业务逻辑 + API | `src/index.ts` |
+| 前端 Worker | Cloudflare Pages Functions | API 代理 + HTML 渲染 | `frontend/_worker.js` |
+
+> 前端 Worker 直连 Supabase REST API，绕过被墙的 `workers.dev` 域名。
+
+### 修改前端 UI
+
+```bash
+# 1. 编辑 frontend/page.html
+# 2. 构建生成 _worker.js
+node scripts/build-worker.js
+# 3. 部署
+npx wrangler pages deploy frontend --project-name=cias-frontend --commit-dirty=true
+```
+
+> 不要手动编辑 `_worker.js`，它由构建脚本自动生成。
 
 ## 验收标准对照
 
