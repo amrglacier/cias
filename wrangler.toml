@@ -1,0 +1,71 @@
+name = "cias-worker"
+main = "src/index.ts"
+compatibility_date = "2024-06-20"
+compatibility_flags = ["nodejs_compat"]
+
+# ============================================================
+# Cron Triggers - SOP workflow scheduling
+# ============================================================
+# T0: Pre-match fundamentals gathering (2 hours before match)
+# T1~Tn: In-play monitoring (every hour during match window)
+# T_fuse: Final publish (15 min before kickoff)
+# Post-match: Review (6 hours after match)
+[triggers]
+crons = [
+  "0 */2 * * *",    # Every 2 hours: T0 fundamentals + T1~Tn monitoring
+  "*/15 * * * *",   # Every 15 min: Odds snapshot capture
+  "0 */6 * * *"     # Every 6 hours: Post-match review
+]
+
+# ============================================================
+# Environment Variables (non-secret)
+# ============================================================
+[vars]
+ENVIRONMENT = "production"
+LOG_LEVEL = "info"
+# Match window configuration
+MATCH_WINDOW_PRE_HOURS = "2"
+MATCH_WINDOW_FUSE_MINUTES = "15"
+# API budget thresholds
+API_BUDGET_CRITICAL_PERCENT = "10"
+# In-play record limit
+INPLAY_MAX_RECORDS = "5"
+# Cross-discussion max rounds
+CROSS_DISCUSSION_MAX_ROUNDS = "2"
+# Review system
+REVIEW_HITRATE_THRESHOLD = "30"
+REVIEW_TREND_ERROR_COUNT = "3"
+REVIEW_ADJUSTMENT_MAX_PERCENT = "10"
+
+# ============================================================
+# Secrets (set via: wrangler secret put <NAME>)
+# See .env.example for details
+# ============================================================
+# SUPABASE_URL
+# SUPABASE_SERVICE_KEY
+# API_FOOTBALL_KEY
+# LLM_API_KEY (for Logic Agent LLM calls)
+# LLM_API_BASE
+
+# ============================================================
+# KV Namespace bindings (for mutex / distributed locks)
+# ============================================================
+[[kv_namespaces]]
+binding = "CIAS_LOCKS"
+id = "a7ea4fdc865b48539de35920bcac4a56"
+preview_id = "9e69c20e6ed44cd0bd0b88e21012d8d1"
+
+# ============================================================
+# Optional: Durable Objects for atomic concurrency control
+# ============================================================
+[[durable_objects.bindings]]
+name = "CONCURRENCY_LOCK"
+class_name = "ConcurrencyLockDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ConcurrencyLockDO"]
+
+# ============================================================
+# Pages (frontend) - deploy separately via `npx wrangler pages deploy frontend`
+# ============================================================
