@@ -397,6 +397,125 @@ export async function setConfig(db: SupabaseClient, key: string, value: unknown)
 }
 
 // ============================================================
+// matches (fixture tracking)
+// ============================================================
+export interface MatchRow {
+  matchId: string;
+  homeTeam: string;
+  awayTeam: string;
+  league: string;
+  leagueId?: number;
+  season?: string;
+  kickoffTime: string;
+  status: 'scheduled' | 'in_play' | 'finished' | 'cancelled' | 'postponed';
+  homeScore?: number;
+  awayScore?: number;
+  halftimeHome?: number;
+  halftimeAway?: number;
+  round?: string;
+  venue?: string;
+}
+
+export async function upsertMatch(db: SupabaseClient, m: MatchRow): Promise<void> {
+  const { error } = await db.from('matches').upsert({
+    match_id: m.matchId,
+    home_team: m.homeTeam,
+    away_team: m.awayTeam,
+    league: m.league,
+    league_id: m.leagueId,
+    season: m.season,
+    kickoff_time: m.kickoffTime,
+    status: m.status,
+    home_score: m.homeScore,
+    away_score: m.awayScore,
+    halftime_home: m.halftimeHome,
+    halftime_away: m.halftimeAway,
+    round: m.round,
+    venue: m.venue,
+  });
+  if (error) throw new Error(`upsertMatch: ${error.message}`);
+}
+
+export async function getMatch(db: SupabaseClient, matchId: string): Promise<MatchRow | null> {
+  const { data, error } = await db
+    .from('matches')
+    .select('*')
+    .eq('match_id', matchId)
+    .maybeSingle();
+  if (error) throw new Error(`getMatch: ${error.message}`);
+  return data ? mapMatchRow(data) : null;
+}
+
+export async function getUpcomingMatches(db: SupabaseClient, withinHours: number): Promise<MatchRow[]> {
+  const now = new Date();
+  const later = new Date(now.getTime() + withinHours * 3600_000);
+  const { data, error } = await db
+    .from('matches')
+    .select('*')
+    .eq('status', 'scheduled')
+    .gte('kickoff_time', now.toISOString())
+    .lte('kickoff_time', later.toISOString())
+    .order('kickoff_time', { ascending: true });
+  if (error) throw new Error(`getUpcomingMatches: ${error.message}`);
+  return (data ?? []).map(mapMatchRow);
+}
+
+export async function getFinishedMatchesWithoutReview(db: SupabaseClient, limit: number = 50): Promise<MatchRow[]> {
+  const { data: finished } = await db
+    .from('matches')
+    .select('*')
+    .eq('status', 'finished')
+    .order('kickoff_time', { ascending: false })
+    .limit(limit);
+
+  if (!finished || finished.length === 0) return [];
+
+  const matchIds = finished.map(m => m.match_id);
+
+  // Find which of these already have reviews
+  const { data: reviewed } = await db
+    .from('review_results')
+    .select('match_id')
+    .in('match_id', matchIds);
+
+  const reviewedSet = new Set((reviewed ?? []).map(r => r.match_id));
+  return finished.filter(m => !reviewedSet.has(m.match_id)).map(mapMatchRow);
+}
+
+export async function updateMatchStatus(
+  db: SupabaseClient, matchId: string, status: string,
+  homeScore?: number, awayScore?: number,
+  halftimeHome?: number, halftimeAway?: number
+): Promise<void> {
+  const update: Record<string, unknown> = { status, updated_at: new Date().toISOString() };
+  if (homeScore !== undefined) update.home_score = homeScore;
+  if (awayScore !== undefined) update.away_score = awayScore;
+  if (halftimeHome !== undefined) update.halftime_home = halftimeHome;
+  if (halftimeAway !== undefined) update.halftime_away = halftimeAway;
+  const { error } = await db.from('matches').update(update).eq('match_id', matchId);
+  if (error) throw new Error(`updateMatchStatus: ${error.message}`);
+}
+
+function mapMatchRow(d: Record<string, unknown>): MatchRow {
+  return {
+    matchId: d.match_id as string,
+    homeTeam: d.home_team as string,
+    awayTeam: d.away_team as string,
+    league: d.league as string,
+    leagueId: d.league_id as number | undefined,
+    season: d.season as string | undefined,
+    kickoffTime: d.kickoff_time as string,
+    status: d.status as MatchRow['status'],
+    homeScore: d.home_score as number | undefined,
+    awayScore: d.away_score as number | undefined,
+    halftimeHome: d.halftime_home as number | undefined,
+    halftimeAway: d.halftime_away as number | undefined,
+    round: d.round as string | undefined,
+    venue: d.venue as string | undefined,
+  };
+}
+
+// ============================================================
 // error_count
 // ============================================================
 export async function logError(db: SupabaseClient, factorId: string, errorType: string, matchId: string): Promise<void> {

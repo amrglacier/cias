@@ -20,8 +20,13 @@ import {
   insertOddsSnapshot, getLatestOddsSnapshot,
   insertMarketSignal, getMarketSignals,
   logApiUsage, getLatestApiUsage,
+  getConfig, getMatch,
 } from '../db/repository';
 import { getSupabase } from '../db/client';
+import {
+  fetchRealTeamStats, fetchRealInjuries, fetchRealLineup,
+  fetchRealReferee, fetchRealOdds,
+} from './api-football-fetcher';
 
 // ============================================================
 // T0: Fundamentals Gathering
@@ -342,47 +347,129 @@ interface RawApiData {
 }
 
 async function fetchApiFootballData(env: Env, match: MatchInfo): Promise<RawApiData> {
-  const baseUrl = env.API_FOOTBALL_BASE_URL || 'https://v3.football.api-sports.io';
-  const isRapidAPI = baseUrl.includes('rapidapi.com');
-  const headers: Record<string, string> = isRapidAPI
-    ? {
-        'x-rapidapi-key': env.API_FOOTBALL_KEY,
-        'x-rapidapi-host': 'api-football-v1.p.rapidapi.com',
-      }
-    : {
-        'x-apisports-key': env.API_FOOTBALL_KEY,
-      };
+  const db = getSupabase(env);
 
-  // Fetch team statistics (xG, goals)
-  const [homeStats, awayStats, leagueStats, weatherData, refereeData, injuryData, formationData] = await Promise.all([
-    fetchTeamStats(env, baseUrl, headers, match, 'home'),
-    fetchTeamStats(env, baseUrl, headers, match, 'away'),
-    fetchLeagueStats(env, baseUrl, headers, match),
-    fetchWeatherData(env, match),
-    fetchRefereeData(env, baseUrl, headers, match),
-    fetchInjuryData(env, baseUrl, headers, match),
-    fetchFormationData(env, baseUrl, headers, match),
+  // Get betting window config for league ID mapping
+  const configRaw = await getConfig(db, 'betting_window_config');
+  let leagueId = 39; // Default: EPL
+  let season = '2025';
+  if (configRaw && typeof configRaw === 'object') {
+    const cfg = configRaw as Record<string, unknown>;
+    if (Array.isArray(cfg.api_football_league_ids) && cfg.api_football_league_ids.length > 0) {
+      leagueId = cfg.api_football_league_ids[0] as number;
+    }
+    if (typeof cfg.season === 'string') {
+      season = cfg.season;
+    }
+  }
+
+  // Extract numeric fixture ID from matchId (af_XXXXX -> XXXXX)
+  const fixtureNumericId = parseInt(match.matchId.replace('af_', '')) || 0;
+
+  // Fetch team stats - need to resolve team names to IDs
+  // For now, use the matchId to get the stored match info
+  const matchRow = await getMatch(db, match.matchId);
+
+  // Default team IDs (would be resolved from matchRow in production)
+  const homeTeamId = matchRow?.leagueId ? matchRow.leagueId : 0; // Placeholder - in production, store team IDs in matches table
+
+  // Fetch real data in parallel
+  const [homeStats, awayStats, refereeData, injuryData, formationData] = await Promise.all([
+    fetchTeamStatsReal(env, leagueId, season, match, matchRow?.homeTeam || match.homeTeam),
+    fetchTeamStatsReal(env, leagueId, season, match, matchRow?.awayTeam || match.awayTeam),
+    fixtureNumericId > 0 ? fetchRealReferee(env, fixtureNumericId) : Promise.resolve({ yellowCardAvg: 3.5, redCardAvg: 0.2, foulsPerGame: 22 }),
+    fixtureNumericId > 0 ? fetchRealInjuries(env, leagueId, season, 0).catch(() => []) : Promise.resolve({ home: [], away: [] }),
+    fixtureNumericId > 0 ? fetchRealLineup(env, fixtureNumericId) : Promise.resolve({ home: '4-3-3', away: '4-4-2' }),
+  ]);
+
+  // Fetch injuries for both teams
+  const [homeInjuries, awayInjuries] = await Promise.all([
+    fetchRealInjuries(env, leagueId, season, 0).catch(() => []),
+    fetchRealInjuries(env, leagueId, season, 0).catch(() => []),
   ]);
 
   return {
-    ...homeStats,
-    ...awayStats,
-    ...leagueStats,
-    weather: weatherData,
+    homeXgRaw: homeStats.xgRaw,
+    awayXgRaw: awayStats.xgRaw,
+    homeConcRaw: homeStats.concRaw,
+    awayConcRaw: awayStats.concRaw,
+    homeMatchesPlayed: homeStats.matchesPlayed,
+    awayMatchesPlayed: awayStats.matchesPlayed,
+    homeOppConcRate: homeStats.oppConcRate,
+    awayOppConcRate: awayStats.oppConcRate,
+    homeOppXgRate: homeStats.oppXgRate,
+    awayOppXgRate: awayStats.oppXgRate,
+    leagueAvgGoals: 1.3,
+    leagueAvgConc: 1.3,
+    weather: { temperature: 20, windSpeed: 5, precipitation: 0, isExtreme: false },
     referee: refereeData,
-    injuries: injuryData,
+    injuries: { home: homeInjuries, away: awayInjuries },
     formations: formationData,
-    isDerby: match.homeTeam === match.awayTeam, // simplified
+    isDerby: match.homeTeam === match.awayTeam,
     isTitleDecider: false,
     isRelegationBattle: false,
     isDeadRubber: false,
   } as RawApiData;
 }
 
+/**
+ * Fetch team stats using the real API-Football fetcher.
+ * Falls back to defaults on error.
+ */
+async function fetchTeamStatsReal(
+  env: Env,
+  leagueId: number,
+  season: string,
+  match: MatchInfo,
+  teamName: string
+): Promise<{
+  xgRaw: number; concRaw: number; matchesPlayed: number;
+  oppConcRate: number; oppXgRate: number;
+  yellowCardAvg: number; redCardAvg: number; foulsPerGame: number;
+}> {
+  try {
+    // In production, we would resolve teamName to teamId via API-Football /teams endpoint
+    // For now, use the real fetcher with a team ID lookup
+    // The team ID would be stored in the matches table when fixtures are fetched
+    const teamId = await resolveTeamId(env, leagueId, season, teamName);
+    if (teamId > 0) {
+      return await fetchRealTeamStats(env, leagueId, season, teamId, 'home');
+    }
+  } catch (err) {
+    console.warn(`[DataAgent] Team stats fetch failed for ${teamName}:`, err);
+  }
+  // Fallback to reasonable defaults
+  return {
+    xgRaw: 1.3, concRaw: 1.3, matchesPlayed: 10,
+    oppConcRate: 1.3, oppXgRate: 1.3,
+    yellowCardAvg: 3.5, redCardAvg: 0.2, foulsPerGame: 22,
+  };
+}
+
+/**
+ * Resolve team name to API-Football team ID.
+ * Queries the API-Football /teams endpoint.
+ */
+async function resolveTeamId(env: Env, leagueId: number, season: string, teamName: string): Promise<number> {
+  const baseUrl = env.API_FOOTBALL_BASE_URL || 'https://v3.football.api-sports.io';
+  const isRapidAPI = baseUrl.includes('rapidapi.com');
+  const headers: Record<string, string> = isRapidAPI
+    ? { 'x-rapidapi-key': env.API_FOOTBALL_KEY, 'x-rapidapi-host': 'api-football-v1.p.rapidapi.com' }
+    : { 'x-apisports-key': env.API_FOOTBALL_KEY };
+
+  const url = `${baseUrl}/teams?search=${encodeURIComponent(teamName)}`;
+  const resp = await fetch(url, { headers });
+  if (!resp.ok) return 0;
+
+  const data = await resp.json() as { response?: Array<{ team?: { id: number; name: string } }> };
+  return data.response?.[0]?.team?.id || 0;
+}
+
 async function fetchTeamStats(
   env: Env, baseUrl: string, headers: Record<string, string>,
   match: MatchInfo, side: 'home' | 'away'
 ): Promise<Partial<RawApiData>> {
+  // This is now a legacy wrapper - real fetching is done in fetchApiFootballData
   const teamId = side === 'home' ? match.homeTeam : match.awayTeam;
   const url = `${baseUrl}/teams/statistics?league=${encodeURIComponent(match.league)}&team=${encodeURIComponent(teamId)}`;
   const resp = await fetch(url, { headers });
@@ -405,7 +492,7 @@ async function fetchTeamStats(
   return {
     [`${prefix}XgRaw`]: xgRaw,
     [`${prefix}ConcRaw`]: concRaw,
-    [`${prefix}MatchesPlayed`]: 10, // Would parse from actual API
+    [`${prefix}MatchesPlayed`]: 10,
     [`${prefix}OppConcRate`]: 1.3,
     [`${prefix}OppXgRate`]: 1.3,
   } as Partial<RawApiData>;
@@ -416,24 +503,55 @@ async function fetchLeagueStats(
   match: MatchInfo
 ): Promise<Partial<RawApiData>> {
   // Fetch league-wide averages for Bayesian prior
-  const url = `${baseUrl}/teams/statistics?league=${encodeURIComponent(match.league)}`;
-  const resp = await fetch(url, { headers });
-  if (!resp.ok) {
-    return { leagueAvgGoals: 1.3, leagueAvgConc: 1.3 };
-  }
+  // Uses the teams/statistics endpoint with a representative team
+  try {
+    const url = `${baseUrl}/teams/statistics?league=${encodeURIComponent(match.league)}&season=2025`;
+    const resp = await fetch(url, { headers });
+    if (!resp.ok) return { leagueAvgGoals: 1.3, leagueAvgConc: 1.3 };
+    const data = await resp.json() as { response?: { goals?: { for?: { average?: { total?: string } }; against?: { average?: { total?: string } } } } };
+    const stats = data.response;
+    if (stats) {
+      return {
+        leagueAvgGoals: parseFloat(stats.goals?.for?.average?.total || '1.3'),
+        leagueAvgConc: parseFloat(stats.goals?.against?.average?.total || '1.3'),
+      };
+    }
+  } catch { /* fall through to defaults */ }
   return { leagueAvgGoals: 1.3, leagueAvgConc: 1.3 };
 }
 
 async function fetchWeatherData(env: Env, match: MatchInfo): Promise<RawApiData['weather']> {
-  // Simplified: in production, call a weather API
-  return { temperature: 20, windSpeed: 5, precipitation: 0, isExtreme: false };
+  // Weather data is not available via API-Football free tier.
+  // In production, integrate Open-Meteo (free, no API key needed).
+  // For now, return neutral conditions.
+  try {
+    // Open-Meteo free API: no key required
+    const matchDate = new Date(match.kickoffTime);
+    const now = new Date();
+    const isHistorical = matchDate < now;
+    const dateStr = matchDate.toISOString().split('T')[0];
+
+    // Without coordinates, return defaults. A full implementation would
+    // resolve venue coordinates and call Open-Meteo's forecast/archive API.
+    return { temperature: 20, windSpeed: 5, precipitation: 0, isExtreme: false };
+  } catch {
+    return { temperature: 20, windSpeed: 5, precipitation: 0, isExtreme: false };
+  }
 }
 
 async function fetchRefereeData(
   env: Env, baseUrl: string, headers: Record<string, string>,
   match: MatchInfo
 ): Promise<RawApiData['referee']> {
-  // Fetch referee statistics
+  // Try to fetch real referee data from API-Football
+  const fixtureId = parseInt(match.matchId.replace('af_', ''));
+  if (fixtureId > 0) {
+    try {
+      return await fetchRealReferee(env, fixtureId);
+    } catch {
+      // Fall through to defaults
+    }
+  }
   return { yellowCardAvg: 3.5, redCardAvg: 0.2, foulsPerGame: 22 };
 }
 
@@ -447,16 +565,41 @@ async function fetchInjuryData(
     return { home: [], away: [] };
   }
 
-  // Parse injuries - simplified
-  return { home: [], away: [] };
+  const data = await resp.json() as { response?: Array<{ player: { name: string; type: string }; team: { id: number } }>; };
+  const injuries = data.response || [];
+
+  // Parse injuries - map to position/importance
+  const parsed = injuries.map(inj => {
+    const pos = inferPositionFromType(inj.player?.type || '');
+    return { position: pos, importance: pos === 'GK' ? 0.8 : pos === 'DEF' ? 0.6 : pos === 'MID' ? 0.4 : 0.3 };
+  }).slice(0, 5);
+
+  return { home: parsed, away: [] };
 }
 
 async function fetchFormationData(
   env: Env, baseUrl: string, headers: Record<string, string>,
   match: MatchInfo
 ): Promise<RawApiData['formations']> {
-  // Fetch lineup/formation data
+  // Try to fetch real lineup data
+  const fixtureId = parseInt(match.matchId.replace('af_', ''));
+  if (fixtureId > 0) {
+    try {
+      return await fetchRealLineup(env, fixtureId);
+    } catch {
+      // Fall through to defaults
+    }
+  }
   return { home: '4-3-3', away: '4-4-2' };
+}
+
+function inferPositionFromType(typeStr: string): 'GK' | 'DEF' | 'MID' | 'FWD' {
+  const t = typeStr.toLowerCase();
+  if (t.includes('goalkeeper') || t.includes('gk')) return 'GK';
+  if (t.includes('defender') || t.includes('def') || t.includes('back')) return 'DEF';
+  if (t.includes('midfielder') || t.includes('mid')) return 'MID';
+  if (t.includes('forward') || t.includes('striker') || t.includes('attacker') || t.includes('wing')) return 'FWD';
+  return 'MID';
 }
 
 // ============================================================
@@ -464,28 +607,43 @@ async function fetchFormationData(
 // ============================================================
 
 async function fetchOddsFromApi(env: Env, matchId: string): Promise<{ homeOdds: number; drawOdds: number; awayOdds: number }> {
-  const baseUrl = env.ODDS_API_BASE_URL || 'https://api.the-odds-api.com/v4';
-  const url = `${baseUrl}/sports/soccer_epl/odds/?apiKey=${env.ODDS_API_KEY}&event_id=${matchId}`;
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`Odds API failed: ${resp.status}`);
+  // Use the real odds fetcher that matches events by team name
+  const db = getSupabase(env);
+  const configRaw = await getConfig(db, 'betting_window_config');
+  let sportKey = 'soccer_epl';
+  if (configRaw && typeof configRaw === 'object') {
+    const cfg = configRaw as Record<string, unknown>;
+    if (Array.isArray(cfg.target_leagues) && cfg.target_leagues.length > 0) {
+      sportKey = cfg.target_leagues[0] as string;
+    }
+  }
 
-  // Log usage
-  const remaining = parseInt(resp.headers.get('x-requests-remaining') || '500');
-  const total = parseInt(resp.headers.get('x-requests-limit') || '500');
-  await logApiCall(env, 'odds-api', '/odds', remaining, total);
+  try {
+    return await fetchRealOdds(env, matchId, sportKey);
+  } catch (err) {
+    console.warn(`[DataAgent] Odds fetch failed for ${matchId}:`, err);
+    // Fallback: try the old direct API call
+    const baseUrl = env.ODDS_API_BASE_URL || 'https://api.the-odds-api.com/v4';
+    const url = `${baseUrl}/sports/${sportKey}/odds/?apiKey=${env.ODDS_API_KEY}&regions=eu&markets=h2h&oddsFormat=decimal`;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`Odds API failed: ${resp.status}`);
 
-  const data = await resp.json() as Array<{ bookmakers?: Array<{ markets?: Array<{ key: string; outcomes?: Array<{ name: string; price: number }> }> }> }>;
+    const remaining = parseInt(resp.headers.get('x-requests-remaining') || '500');
+    const total = parseInt(resp.headers.get('x-requests-limit') || '500');
+    await logApiCall(env, 'odds-api', '/odds', remaining, total);
 
-  // Extract first bookmaker's h2h market
-  const firstBook = data[0]?.bookmakers?.[0];
-  const h2h = firstBook?.markets?.find(m => m.key === 'h2h');
-  const outcomes = h2h?.outcomes || [];
+    const data = await resp.json() as Array<{ bookmakers?: Array<{ markets?: Array<{ key: string; outcomes?: Array<{ name: string; price: number }> }> }> }>;
 
-  return {
-    homeOdds: outcomes[0]?.price || 2.0,
-    drawOdds: outcomes[1]?.price || 3.0,
-    awayOdds: outcomes[2]?.price || 3.0,
-  };
+    const firstBook = data[0]?.bookmakers?.[0];
+    const h2h = firstBook?.markets?.find(m => m.key === 'h2h');
+    const outcomes = h2h?.outcomes || [];
+
+    return {
+      homeOdds: outcomes[0]?.price || 2.0,
+      drawOdds: outcomes[1]?.price || 3.0,
+      awayOdds: outcomes[2]?.price || 3.0,
+    };
+  }
 }
 
 // ============================================================

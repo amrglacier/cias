@@ -301,8 +301,8 @@ export interface Env {
   // API-Football
   API_FOOTBALL_KEY: string;
   API_FOOTBALL_BASE_URL?: string;
-  // LLM
-  LLM_API_KEY: string;
+  // LLM (optional - Plan B does not use LLM)
+  LLM_API_KEY?: string;
   LLM_API_BASE?: string;
   LLM_MODEL?: string;
   // Odds API

@@ -21,7 +21,10 @@ import {
 } from '../db/repository';
 import { getConfig } from '../db/repository';
 import { DEFAULT_FACTOR_WEIGHTS } from '../config/defaults';
-import { LOGIC_AGENT_SYSTEM_PROMPT } from '../prompts/logic-agent-prompt';
+
+// SRS 2.2: Logic Agent is a pure quantitative engine (Plan B - no LLM)
+// All predictions are computed via mathematical formulas (OWF/K1/Wr)
+// The LOGIC_AGENT_SYSTEM_PROMPT is not used in Plan B mode
 
 // ============================================================
 // Phase 2: Independent Prediction (Initial)

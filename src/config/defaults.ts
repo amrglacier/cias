@@ -67,6 +67,51 @@ export const ODDS_ZONES = {
 // Death odds specific values (民俗知识)
 export const DEATH_ODDS_VALUES = [1.44, 2.22, 3.33];
 
+// ============================================================
+// Betting Window Config (configurable via system_config)
+// ============================================================
+export interface BettingWindowConfig {
+  start_hours_before_kickoff: number;
+  end_minutes_before_kickoff: number;
+  daily_active_start: string;
+  daily_active_end: string;
+  timezone: string;
+  target_leagues: string[];
+  api_football_league_ids: number[];
+  season: string;
+}
+
+export const DEFAULT_BETTING_WINDOW_CONFIG: BettingWindowConfig = {
+  start_hours_before_kickoff: 2,
+  end_minutes_before_kickoff: 15,
+  daily_active_start: '06:00',
+  daily_active_end: '23:59',
+  timezone: 'Asia/Shanghai',
+  target_leagues: ['soccer_epl', 'soccer_spain_la_liga', 'soccer_italy_serie_a', 'soccer_germany_bundesliga', 'soccer_france_ligue_one'],
+  api_football_league_ids: [39, 140, 135, 78, 61],
+  season: '2025',
+};
+
+/**
+ * Get betting window config from system_config (DB) with fallback to defaults.
+ */
+export function mergeBettingWindowConfig(dbValue: unknown): BettingWindowConfig {
+  if (!dbValue || typeof dbValue !== 'object') {
+    return { ...DEFAULT_BETTING_WINDOW_CONFIG };
+  }
+  const obj = dbValue as Record<string, unknown>;
+  return {
+    start_hours_before_kickoff: typeof obj.start_hours_before_kickoff === 'number' ? obj.start_hours_before_kickoff : DEFAULT_BETTING_WINDOW_CONFIG.start_hours_before_kickoff,
+    end_minutes_before_kickoff: typeof obj.end_minutes_before_kickoff === 'number' ? obj.end_minutes_before_kickoff : DEFAULT_BETTING_WINDOW_CONFIG.end_minutes_before_kickoff,
+    daily_active_start: typeof obj.daily_active_start === 'string' ? obj.daily_active_start : DEFAULT_BETTING_WINDOW_CONFIG.daily_active_start,
+    daily_active_end: typeof obj.daily_active_end === 'string' ? obj.daily_active_end : DEFAULT_BETTING_WINDOW_CONFIG.daily_active_end,
+    timezone: typeof obj.timezone === 'string' ? obj.timezone : DEFAULT_BETTING_WINDOW_CONFIG.timezone,
+    target_leagues: Array.isArray(obj.target_leagues) ? obj.target_leagues as string[] : DEFAULT_BETTING_WINDOW_CONFIG.target_leagues,
+    api_football_league_ids: Array.isArray(obj.api_football_league_ids) ? obj.api_football_league_ids as number[] : DEFAULT_BETTING_WINDOW_CONFIG.api_football_league_ids,
+    season: typeof obj.season === 'string' ? obj.season : DEFAULT_BETTING_WINDOW_CONFIG.season,
+  };
+}
+
 export function classifyOddsZone(homeOdds: number): string {
   if (DEATH_ODDS_VALUES.some(v => Math.abs(homeOdds - v) < 0.02)) {
     return ODDS_ZONES.DEATH_ODDS;

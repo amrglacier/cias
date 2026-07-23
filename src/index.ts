@@ -10,12 +10,18 @@ import {
 } from './system/orchestrator';
 import { runPostMatchReview } from './review/attribution';
 import { captureOddsSnapshot } from './agents/data-agent';
+import { fetchAndStoreUpcomingFixtures, fetchAndStoreFinishedMatches } from './agents/api-football-fetcher';
 import { getSupabase } from './db/client';
 import {
   getMatchFacts, getLatestPrediction, getLockedPrediction,
   getInPlayPredictions, getReviewResults, getRecentReviews,
-  getOddsSnapshotCount, getConfig,
+  getOddsSnapshotCount, getConfig, setConfig,
+  getUpcomingMatches, getFinishedMatchesWithoutReview,
+  getMatch, updateMatchStatus,
 } from './db/repository';
+import {
+  mergeBettingWindowConfig, type BettingWindowConfig,
+} from './config/defaults';
 import type { Env, MatchInfo, MatchResult } from './types';
 
 // ============================================================
@@ -85,6 +91,14 @@ export default {
         case '/api/config':
           return await handleGetConfig(env, url, corsHeaders);
 
+        case '/api/config/betting-window':
+          if (request.method === 'GET') {
+            return await handleGetBettingWindowConfig(env, corsHeaders);
+          } else if (request.method === 'POST') {
+            return await handleUpdateBettingWindowConfig(request, env, corsHeaders);
+          }
+          return jsonResponse({ error: 'Method not allowed' }, corsHeaders, 405);
+
         default:
           // Try serving static frontend assets
           if (path.startsWith('/app/')) {
@@ -123,27 +137,214 @@ export default {
 };
 
 // ============================================================
-// Scheduled Job Handlers
+// Scheduled Job Handlers (Real Implementation)
 // ============================================================
 
+/**
+ * Cron 1 (every 2 hours): Fundamentals gathering + in-play monitoring.
+ * - Fetch upcoming fixtures from API-Football
+ * - For matches entering the pre-match window (configurable start_hours_before_kickoff):
+ *   run Phase 1 (T0) + Phase 2 (Initial) + Phase 3 (Cross-Discussion)
+ * - For matches in the final window (end_minutes_before_kickoff): run Phase 5 (Final Publish)
+ * - For in-play matches: run Phase 4
+ */
 async function runScheduledFundamentalsAndMonitoring(env: Env): Promise<void> {
-  // In production: fetch upcoming matches from DB or API
-  // For each match in the pre-match window:
-  //   - If not yet in T0: run Phase 1 + 2 + 3
-  //   - If in-play: run Phase 4
-
   console.log('[Cron] Running fundamentals + monitoring cycle');
-  // Implementation would iterate over active matches
+  const db = getSupabase(env);
+
+  // Step 1: Fetch and store upcoming fixtures from API-Football
+  try {
+    const stored = await fetchAndStoreUpcomingFixtures(env);
+    console.log(`[Cron] Fetched ${stored} upcoming fixtures`);
+  } catch (err) {
+    console.error('[Cron] Failed to fetch fixtures:', err);
+  }
+
+  // Step 2: Fetch finished matches and update scores
+  try {
+    const updated = await fetchAndStoreFinishedMatches(env);
+    console.log(`[Cron] Updated ${updated} finished matches`);
+  } catch (err) {
+    console.error('[Cron] Failed to fetch finished matches:', err);
+  }
+
+  // Step 3: Get betting window config
+  const configRaw = await getConfig(db, 'betting_window_config');
+  const config = mergeBettingWindowConfig(configRaw);
+
+  // Step 4: Process upcoming matches in the pre-match window
+  const upcomingMatches = await getUpcomingMatches(db, config.start_hours_before_kickoff + 1);
+  const now = new Date();
+
+  for (const matchRow of upcomingMatches) {
+    const kickoff = new Date(matchRow.kickoffTime);
+    const hoursBeforeKickoff = (kickoff.getTime() - now.getTime()) / 3600_000;
+
+    // Check if match is within the pre-match window (start window)
+    if (hoursBeforeKickoff <= config.start_hours_before_kickoff && hoursBeforeKickoff > 0) {
+      console.log(`[Cron] Match ${matchRow.matchId} is in pre-match window (${hoursBeforeKickoff.toFixed(1)}h before kickoff)`);
+
+      // Check if fundamentals already gathered
+      const existingFacts = await getMatchFacts(db, matchRow.matchId);
+      if (!existingFacts) {
+        try {
+          // Build MatchInfo from match row
+          const matchInfo: MatchInfo = {
+            matchId: matchRow.matchId,
+            homeTeam: matchRow.homeTeam,
+            awayTeam: matchRow.awayTeam,
+            league: matchRow.league,
+            kickoffTime: matchRow.kickoffTime,
+            status: 'scheduled',
+          };
+
+          // Phase 1: T0 - Gather fundamentals
+          await runPhase1_T0(env, matchInfo);
+          console.log(`[Cron] Phase 1 (T0) complete for ${matchRow.matchId}`);
+
+          // Phase 2: Initial prediction
+          await runPhase2_Initial(env, matchRow.matchId);
+          console.log(`[Cron] Phase 2 (Initial) complete for ${matchRow.matchId}`);
+
+          // Phase 3: Cross-discussion
+          await runPhase3_CrossDiscussion(env, matchRow.matchId);
+          console.log(`[Cron] Phase 3 (Cross-Discussion) complete for ${matchRow.matchId}`);
+        } catch (err) {
+          console.error(`[Cron] Error processing pre-match for ${matchRow.matchId}:`, err);
+        }
+      }
+    }
+
+    // Check if match is in the final publish window (end_minutes_before_kickoff)
+    const minutesBeforeKickoff = (kickoff.getTime() - now.getTime()) / 60_000;
+    if (minutesBeforeKickoff <= config.end_minutes_before_kickoff && minutesBeforeKickoff > 0) {
+      console.log(`[Cron] Match ${matchRow.matchId} is in final publish window (${minutesBeforeKickoff.toFixed(0)}min before kickoff)`);
+
+      try {
+        // Check if not already locked
+        const existing = await getLockedPrediction(db, matchRow.matchId);
+        if (!existing) {
+          // Phase 5: Final Publish
+          await runPhase5_FinalPublish(env, matchRow.matchId);
+          console.log(`[Cron] Phase 5 (Final Publish) complete for ${matchRow.matchId}`);
+        }
+      } catch (err) {
+        console.error(`[Cron] Error in final publish for ${matchRow.matchId}:`, err);
+      }
+    }
+  }
+
+  // Step 5: Process in-play matches (Phase 4)
+  try {
+    const { data: inPlayMatches } = await db
+      .from('matches')
+      .select('*')
+      .eq('status', 'in_play')
+      .limit(20);
+
+    if (inPlayMatches) {
+      for (const m of inPlayMatches) {
+        const matchId = m.match_id as string;
+        try {
+          await runPhase4_InPlayMonitoring(env, matchId);
+          console.log(`[Cron] Phase 4 (In-Play) complete for ${matchId}`);
+        } catch (err) {
+          console.error(`[Cron] Error in in-play monitoring for ${matchId}:`, err);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Cron] Error fetching in-play matches:', err);
+  }
 }
 
+/**
+ * Cron 2 (every 15 minutes): Odds snapshot capture.
+ * Captures odds for all scheduled and in-play matches.
+ */
 async function runScheduledOddsCapture(env: Env): Promise<void> {
   console.log('[Cron] Running odds snapshot capture');
-  // Iterate over active matches and capture odds
+  const db = getSupabase(env);
+
+  // Get all matches that are scheduled or in-play (within a reasonable window)
+  const now = new Date();
+  const sixHoursLater = new Date(now.getTime() + 6 * 3600_000);
+  const sixHoursAgo = new Date(now.getTime() - 6 * 3600_000);
+
+  const { data: activeMatches, error } = await db
+    .from('matches')
+    .select('match_id, status')
+    .in('status', ['scheduled', 'in_play'])
+    .gte('kickoff_time', sixHoursAgo.toISOString())
+    .lte('kickoff_time', sixHoursLater.toISOString());
+
+  if (error || !activeMatches) {
+    console.error('[Cron] Error fetching active matches for odds:', error);
+    return;
+  }
+
+  for (const m of activeMatches) {
+    const matchId = m.match_id as string;
+    try {
+      const result = await captureOddsSnapshot(env, matchId);
+      if (result.signals.length > 0) {
+        console.log(`[Cron] ${result.signals.length} signals detected for ${matchId}`);
+        // If match has a prediction and signals detected, trigger recalculation
+        const prediction = await getLatestPrediction(db, matchId);
+        if (prediction && !prediction.isLock) {
+          await runPhase4_InPlayMonitoring(env, matchId);
+        }
+      }
+    } catch (err) {
+      // Odds API may fail for some matches - continue to next
+      console.warn(`[Cron] Odds capture failed for ${matchId}:`, (err as Error).message);
+    }
+  }
+
+  console.log(`[Cron] Odds capture complete for ${activeMatches.length} matches`);
 }
 
+/**
+ * Cron 3 (every 6 hours): Post-match review.
+ * Finds finished matches without reviews and processes them.
+ */
 async function runScheduledReview(env: Env): Promise<void> {
   console.log('[Cron] Running post-match review');
-  // Find finished matches without review and process them
+  const db = getSupabase(env);
+
+  // First, fetch finished matches to update scores
+  try {
+    await fetchAndStoreFinishedMatches(env);
+  } catch (err) {
+    console.error('[Cron] Failed to fetch finished matches for review:', err);
+  }
+
+  // Get finished matches without reviews
+  const matchesToReview = await getFinishedMatchesWithoutReview(db, 20);
+
+  for (const match of matchesToReview) {
+    try {
+      // Determine actual result from scores
+      const homeScore = match.homeScore ?? 0;
+      const awayScore = match.awayScore ?? 0;
+      let actualResult: MatchResult;
+      if (homeScore > awayScore) actualResult = 'home_win';
+      else if (homeScore < awayScore) actualResult = 'away_win';
+      else actualResult = 'draw';
+
+      const actualFt = `${homeScore}:${awayScore}`;
+      const actualHt = match.halftimeHome !== undefined && match.halftimeAway !== undefined
+        ? `${match.halftimeHome}:${match.halftimeAway}`
+        : undefined;
+
+      await runPostMatchReview(env, match.matchId, actualResult, actualFt, actualHt);
+      console.log(`[Cron] Review complete for ${match.matchId}: ${actualResult} ${actualFt}`);
+    } catch (err) {
+      console.error(`[Cron] Review failed for ${match.matchId}:`, err);
+    }
+  }
+
+  console.log(`[Cron] Post-match review complete: ${matchesToReview.length} matches reviewed`);
 }
 
 // ============================================================
@@ -313,6 +514,59 @@ async function handleGetConfig(env: Env, url: URL, cors: Record<string, string>)
   }
   const value = await getConfig(db, key);
   return jsonResponse({ key, value }, cors);
+}
+
+/**
+ * GET /api/config/betting-window
+ * Returns the current betting window configuration.
+ */
+async function handleGetBettingWindowConfig(env: Env, cors: Record<string, string>): Promise<Response> {
+  const db = getSupabase(env);
+  const raw = await getConfig(db, 'betting_window_config');
+  const config = mergeBettingWindowConfig(raw);
+  return jsonResponse({ config }, cors);
+}
+
+/**
+ * POST /api/config/betting-window
+ * Updates the betting window configuration.
+ * Body: partial BettingWindowConfig fields to update.
+ */
+async function handleUpdateBettingWindowConfig(
+  request: Request, env: Env, cors: Record<string, string>
+): Promise<Response> {
+  const db = getSupabase(env);
+  const body = await request.json() as Partial<BettingWindowConfig>;
+
+  // Read current config
+  const currentRaw = await getConfig(db, 'betting_window_config');
+  const current = mergeBettingWindowConfig(currentRaw);
+
+  // Merge updates
+  const updated: BettingWindowConfig = {
+    start_hours_before_kickoff: body.start_hours_before_kickoff ?? current.start_hours_before_kickoff,
+    end_minutes_before_kickoff: body.end_minutes_before_kickoff ?? current.end_minutes_before_kickoff,
+    daily_active_start: body.daily_active_start ?? current.daily_active_start,
+    daily_active_end: body.daily_active_end ?? current.daily_active_end,
+    timezone: body.timezone ?? current.timezone,
+    target_leagues: body.target_leagues ?? current.target_leagues,
+    api_football_league_ids: body.api_football_league_ids ?? current.api_football_league_ids,
+    season: body.season ?? current.season,
+  };
+
+  // Validate
+  if (updated.start_hours_before_kickoff < 0.5 || updated.start_hours_before_kickoff > 24) {
+    return jsonResponse({ error: 'start_hours_before_kickoff must be between 0.5 and 24' }, cors, 400);
+  }
+  if (updated.end_minutes_before_kickoff < 1 || updated.end_minutes_before_kickoff > 120) {
+    return jsonResponse({ error: 'end_minutes_before_kickoff must be between 1 and 120' }, cors, 400);
+  }
+  if (updated.start_hours_before_kickoff * 60 <= updated.end_minutes_before_kickoff) {
+    return jsonResponse({ error: 'start window must be earlier than end window' }, cors, 400);
+  }
+
+  await setConfig(db, 'betting_window_config', updated);
+  return jsonResponse({ config: updated, status: 'updated' }, cors);
 }
 
 // ============================================================

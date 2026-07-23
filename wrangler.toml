@@ -37,14 +37,14 @@ REVIEW_HITRATE_THRESHOLD = "30"
 REVIEW_TREND_ERROR_COUNT = "3"
 REVIEW_ADJUSTMENT_MAX_PERCENT = "10"
 
-# ============================================================
 # Secrets (set via: wrangler secret put <NAME>)
 # See .env.example for details
 # ============================================================
 # SUPABASE_URL
 # SUPABASE_SERVICE_KEY
 # API_FOOTBALL_KEY
-# LLM_API_KEY (for Logic Agent LLM calls)
+# ODDS_API_KEY
+# LLM_API_KEY (for Logic Agent LLM calls - not used in Plan B)
 # LLM_API_BASE
 
 # ============================================================
