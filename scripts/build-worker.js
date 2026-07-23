@@ -192,6 +192,8 @@ export default {
           const body = await request.json();
           const start = body.start_hours_before_kickoff;
           const end = body.end_minutes_before_kickoff;
+          const fundDelay = body.fundamentals_delay_after_start_hours;
+          const finalLock = body.final_lock_minutes_before_end;
           const league_ids = body.league_ids;
           const season = body.season;
           if (typeof start !== "number" || start < 1 || start > 72) {
@@ -206,7 +208,10 @@ export default {
           const cfg = {
             start_hours_before_kickoff: start,
             end_minutes_before_kickoff: end,
-            league_ids: Array.isArray(league_ids) ? league_ids : [39, 140, 135, 78, 61],
+            fundamentals_delay_after_start_hours: typeof fundDelay === "number" ? fundDelay : 0.5,
+            final_lock_minutes_before_end: typeof finalLock === "number" ? finalLock : 15,
+            api_football_league_ids: Array.isArray(league_ids) ? league_ids : [39, 140, 135, 78, 61],
+            target_leagues: ["soccer_epl", "soccer_spain_la_liga", "soccer_italy_serie_a", "soccer_germany_bundesliga", "soccer_france_ligue_one"],
             season: typeof season === "string" ? season : "2025",
           };
           const result = await supabasePost("system_config", { key: "betting_window_config", value: cfg });

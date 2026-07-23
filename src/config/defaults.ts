@@ -73,6 +73,8 @@ export const DEATH_ODDS_VALUES = [1.44, 2.22, 3.33];
 export interface BettingWindowConfig {
   start_hours_before_kickoff: number;
   end_minutes_before_kickoff: number;
+  fundamentals_delay_after_start_hours: number;
+  final_lock_minutes_before_end: number;
   daily_active_start: string;
   daily_active_end: string;
   timezone: string;
@@ -84,6 +86,8 @@ export interface BettingWindowConfig {
 export const DEFAULT_BETTING_WINDOW_CONFIG: BettingWindowConfig = {
   start_hours_before_kickoff: 2,
   end_minutes_before_kickoff: 15,
+  fundamentals_delay_after_start_hours: 0.5,
+  final_lock_minutes_before_end: 15,
   daily_active_start: '06:00',
   daily_active_end: '23:59',
   timezone: 'Asia/Shanghai',
@@ -103,6 +107,8 @@ export function mergeBettingWindowConfig(dbValue: unknown): BettingWindowConfig 
   return {
     start_hours_before_kickoff: typeof obj.start_hours_before_kickoff === 'number' ? obj.start_hours_before_kickoff : DEFAULT_BETTING_WINDOW_CONFIG.start_hours_before_kickoff,
     end_minutes_before_kickoff: typeof obj.end_minutes_before_kickoff === 'number' ? obj.end_minutes_before_kickoff : DEFAULT_BETTING_WINDOW_CONFIG.end_minutes_before_kickoff,
+    fundamentals_delay_after_start_hours: typeof obj.fundamentals_delay_after_start_hours === 'number' ? obj.fundamentals_delay_after_start_hours : DEFAULT_BETTING_WINDOW_CONFIG.fundamentals_delay_after_start_hours,
+    final_lock_minutes_before_end: typeof obj.final_lock_minutes_before_end === 'number' ? obj.final_lock_minutes_before_end : DEFAULT_BETTING_WINDOW_CONFIG.final_lock_minutes_before_end,
     daily_active_start: typeof obj.daily_active_start === 'string' ? obj.daily_active_start : DEFAULT_BETTING_WINDOW_CONFIG.daily_active_start,
     daily_active_end: typeof obj.daily_active_end === 'string' ? obj.daily_active_end : DEFAULT_BETTING_WINDOW_CONFIG.daily_active_end,
     timezone: typeof obj.timezone === 'string' ? obj.timezone : DEFAULT_BETTING_WINDOW_CONFIG.timezone,

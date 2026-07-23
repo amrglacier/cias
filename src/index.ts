@@ -129,8 +129,8 @@ export default {
     if (event.cron === '0 */2 * * *') {
       // T0 + T1~Tn: Fundamentals gathering and in-play monitoring
       await runScheduledFundamentalsAndMonitoring(env);
-    } else if (event.cron === '*/15 * * * *') {
-      // Odds snapshot capture every 15 minutes
+    } else if (event.cron === '*/30 * * * *') {
+      // Odds snapshot capture every 30 minutes
       await runScheduledOddsCapture(env);
     } else if (event.cron === '0 */6 * * *') {
       // Post-match review every 6 hours
@@ -146,9 +146,9 @@ export default {
 /**
  * Cron 1 (every 2 hours): Fundamentals gathering + in-play monitoring.
  * - Fetch upcoming fixtures from API-Football
- * - For matches entering the pre-match window (configurable start_hours_before_kickoff):
+ * - For matches entering the fundamentals window (start_hours - fundamentals_delay):
  *   run Phase 1 (T0) + Phase 2 (Initial) + Phase 3 (Cross-Discussion)
- * - For matches in the final window (end_minutes_before_kickoff): run Phase 5 (Final Publish)
+ * - For matches in the final lock window (end_minutes + final_lock_minutes): run Phase 5 (Final Publish)
  * - For in-play matches: run Phase 4
  */
 async function runScheduledFundamentalsAndMonitoring(env: Env): Promise<void> {
@@ -175,6 +175,14 @@ async function runScheduledFundamentalsAndMonitoring(env: Env): Promise<void> {
   const configRaw = await getConfig(db, 'betting_window_config');
   const config = mergeBettingWindowConfig(configRaw);
 
+  // Fundamentals trigger: start_hours_before_kickoff - fundamentals_delay_after_start_hours
+  // e.g. if start=2h and delay=0.5h, fundamentals trigger at 1.5h before kickoff
+  const fundamentalsTriggerHours = config.start_hours_before_kickoff - config.fundamentals_delay_after_start_hours;
+
+  // Final lock trigger: end_minutes_before_kickoff + final_lock_minutes_before_end
+  // e.g. if end=15min and lock=15min, final lock triggers at 30min before kickoff
+  const finalLockMinutes = config.end_minutes_before_kickoff + config.final_lock_minutes_before_end;
+
   // Step 4: Process upcoming matches in the pre-match window
   const upcomingMatches = await getUpcomingMatches(db, config.start_hours_before_kickoff + 1);
   const now = new Date();
@@ -182,10 +190,12 @@ async function runScheduledFundamentalsAndMonitoring(env: Env): Promise<void> {
   for (const matchRow of upcomingMatches) {
     const kickoff = new Date(matchRow.kickoffTime);
     const hoursBeforeKickoff = (kickoff.getTime() - now.getTime()) / 3600_000;
+    const minutesBeforeKickoff = (kickoff.getTime() - now.getTime()) / 60_000;
 
-    // Check if match is within the pre-match window (start window)
-    if (hoursBeforeKickoff <= config.start_hours_before_kickoff && hoursBeforeKickoff > 0) {
-      console.log(`[Cron] Match ${matchRow.matchId} is in pre-match window (${hoursBeforeKickoff.toFixed(1)}h before kickoff)`);
+    // Fundamentals: trigger after the delay window (e.g. 1.5h before kickoff, not 2h)
+    // This avoids congestion and data delay at the exact start time
+    if (hoursBeforeKickoff <= fundamentalsTriggerHours && hoursBeforeKickoff > 0) {
+      console.log(`[Cron] Match ${matchRow.matchId} is in fundamentals window (${hoursBeforeKickoff.toFixed(2)}h before kickoff, trigger at ${fundamentalsTriggerHours}h)`);
 
       // Check if fundamentals already gathered
       const existingFacts = await getMatchFacts(db, matchRow.matchId);
@@ -218,10 +228,10 @@ async function runScheduledFundamentalsAndMonitoring(env: Env): Promise<void> {
       }
     }
 
-    // Check if match is in the final publish window (end_minutes_before_kickoff)
-    const minutesBeforeKickoff = (kickoff.getTime() - now.getTime()) / 60_000;
-    if (minutesBeforeKickoff <= config.end_minutes_before_kickoff && minutesBeforeKickoff > 0) {
-      console.log(`[Cron] Match ${matchRow.matchId} is in final publish window (${minutesBeforeKickoff.toFixed(0)}min before kickoff)`);
+    // Final lock: trigger before the betting end time (e.g. 30min before kickoff)
+    // This gives enough buffer before the betting window closes
+    if (minutesBeforeKickoff <= finalLockMinutes && minutesBeforeKickoff > config.end_minutes_before_kickoff) {
+      console.log(`[Cron] Match ${matchRow.matchId} is in final lock window (${minutesBeforeKickoff.toFixed(0)}min before kickoff, lock at ${finalLockMinutes}min)`);
 
       try {
         // Check if not already locked
@@ -249,7 +259,15 @@ async function runScheduledFundamentalsAndMonitoring(env: Env): Promise<void> {
       for (const m of inPlayMatches) {
         const matchId = m.match_id as string;
         try {
-          await runPhase4_InPlayMonitoring(env, matchId);
+          const matchInfo: MatchInfo = {
+            matchId,
+            homeTeam: m.home_team as string,
+            awayTeam: m.away_team as string,
+            league: (m.league as string) || '',
+            kickoffTime: (m.kickoff_time as string) || '',
+            status: 'in_play',
+          };
+          await runPhase4_InPlayMonitoring(env, matchInfo);
           console.log(`[Cron] Phase 4 (In-Play) complete for ${matchId}`);
         } catch (err) {
           console.error(`[Cron] Error in in-play monitoring for ${matchId}:`, err);
@@ -262,7 +280,7 @@ async function runScheduledFundamentalsAndMonitoring(env: Env): Promise<void> {
 }
 
 /**
- * Cron 2 (every 15 minutes): Odds snapshot capture.
+ * Cron 2 (every 30 minutes): Odds snapshot capture.
  * Captures odds for all scheduled and in-play matches.
  */
 async function runScheduledOddsCapture(env: Env): Promise<void> {
@@ -276,7 +294,7 @@ async function runScheduledOddsCapture(env: Env): Promise<void> {
 
   const { data: activeMatches, error } = await db
     .from('matches')
-    .select('match_id, status')
+    .select('match_id, status, home_team, away_team, league, kickoff_time')
     .in('status', ['scheduled', 'in_play'])
     .gte('kickoff_time', sixHoursAgo.toISOString())
     .lte('kickoff_time', sixHoursLater.toISOString());
@@ -295,7 +313,15 @@ async function runScheduledOddsCapture(env: Env): Promise<void> {
         // If match has a prediction and signals detected, trigger recalculation
         const prediction = await getLatestPrediction(db, matchId);
         if (prediction && !prediction.isLock) {
-          await runPhase4_InPlayMonitoring(env, matchId);
+          const matchInfo: MatchInfo = {
+            matchId,
+            homeTeam: m.home_team as string,
+            awayTeam: m.away_team as string,
+            league: (m.league as string) || '',
+            kickoffTime: (m.kickoff_time as string) || '',
+            status: 'in_play',
+          };
+          await runPhase4_InPlayMonitoring(env, matchInfo);
         }
       }
     } catch (err) {
@@ -495,7 +521,7 @@ async function handleRunSOP(request: Request, env: Env, cors: Record<string, str
       result = await runPhase3_CrossDiscussion(env, body.match.matchId);
       break;
     case 'PERIODIC':
-      result = await runPhase4_InPlayMonitoring(env, body.match.matchId);
+      result = await runPhase4_InPlayMonitoring(env, body.match);
       break;
     case 'FUSE':
       result = await runPhase5_FinalPublish(env, body.match.matchId);
@@ -609,6 +635,8 @@ async function handleUpdateBettingWindowConfig(
   const updated: BettingWindowConfig = {
     start_hours_before_kickoff: body.start_hours_before_kickoff ?? current.start_hours_before_kickoff,
     end_minutes_before_kickoff: body.end_minutes_before_kickoff ?? current.end_minutes_before_kickoff,
+    fundamentals_delay_after_start_hours: body.fundamentals_delay_after_start_hours ?? current.fundamentals_delay_after_start_hours,
+    final_lock_minutes_before_end: body.final_lock_minutes_before_end ?? current.final_lock_minutes_before_end,
     daily_active_start: body.daily_active_start ?? current.daily_active_start,
     daily_active_end: body.daily_active_end ?? current.daily_active_end,
     timezone: body.timezone ?? current.timezone,
@@ -623,6 +651,12 @@ async function handleUpdateBettingWindowConfig(
   }
   if (updated.end_minutes_before_kickoff < 1 || updated.end_minutes_before_kickoff > 120) {
     return jsonResponse({ error: 'end_minutes_before_kickoff must be between 1 and 120' }, cors, 400);
+  }
+  if (updated.fundamentals_delay_after_start_hours < 0 || updated.fundamentals_delay_after_start_hours >= updated.start_hours_before_kickoff) {
+    return jsonResponse({ error: 'fundamentals_delay_after_start_hours must be >= 0 and < start_hours_before_kickoff' }, cors, 400);
+  }
+  if (updated.final_lock_minutes_before_end < 0 || updated.final_lock_minutes_before_end > 120) {
+    return jsonResponse({ error: 'final_lock_minutes_before_end must be between 0 and 120' }, cors, 400);
   }
   if (updated.start_hours_before_kickoff * 60 <= updated.end_minutes_before_kickoff) {
     return jsonResponse({ error: 'start window must be earlier than end window' }, cors, 400);

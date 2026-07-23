@@ -13,7 +13,7 @@ compatibility_flags = ["nodejs_compat"]
 [triggers]
 crons = [
   "0 */2 * * *",    # Every 2 hours: T0 fundamentals + T1~Tn monitoring
-  "*/15 * * * *",   # Every 15 min: Odds snapshot capture
+  "*/30 * * * *",   # Every 30 min: Odds snapshot capture
   "0 */6 * * *"     # Every 6 hours: Post-match review
 ]
 

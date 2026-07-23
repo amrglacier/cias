@@ -8,6 +8,7 @@ import type { Env, MatchInfo, Prediction, MarketSignal, CrossDiscussionEntry } f
 import { getSupabase } from '../db/client';
 import {
   gatherFundamentals, buildEvidencePack, captureOddsSnapshot,
+  refreshDynamicFactors,
 } from '../agents/data-agent';
 import {
   produceInitialPrediction, periodicRecalculation,
@@ -170,12 +171,21 @@ function detectDiscrepancies(
 // Phase 4: In-Play Monitoring & Lightweight Recalculation
 // ============================================================
 
-export async function runPhase4_InPlayMonitoring(env: Env, matchId: string): Promise<Prediction | null> {
-  console.log(`[System] === Phase 4: In-Play Monitoring for ${matchId} ===`);
+export async function runPhase4_InPlayMonitoring(env: Env, match: MatchInfo): Promise<Prediction | null> {
+  console.log(`[System] === Phase 4: In-Play Monitoring for ${match.matchId} ===`);
   const db = getSupabase(env);
 
-  // SRS: Data Agent - hourly Cron, capture odds snapshot
-  const { signals } = await captureOddsSnapshot(env, matchId);
+  // SRS: Data Agent - refresh DYNAMIC factors (injuries, lineup, referee, weather)
+  // Static data (team season stats) is NOT re-fetched - uses cache
+  try {
+    await refreshDynamicFactors(env, match);
+    console.log(`[System] Dynamic factors refreshed for ${match.matchId}`);
+  } catch (err) {
+    console.warn(`[System] Dynamic refresh failed, continuing with stale data:`, err);
+  }
+
+  // SRS: Data Agent - capture odds snapshot
+  const { signals } = await captureOddsSnapshot(env, match.matchId);
 
   // SRS: Signal detection - Sharp Move (>=5%) or Steam Move
   if (signals.length === 0) {
@@ -186,14 +196,14 @@ export async function runPhase4_InPlayMonitoring(env: Env, matchId: string): Pro
   console.log(`[System] ${signals.length} signals detected, triggering recalculation`);
 
   // SRS: Logic Agent - lightweight recalculation
-  const newPrediction = await periodicRecalculation(env, matchId, signals);
+  const newPrediction = await periodicRecalculation(env, match.matchId, signals);
 
   if (newPrediction) {
     // SRS: Window maintenance - check in-play record count
-    const inPlayPredictions = await getInPlayPredictions(db, matchId);
+    const inPlayPredictions = await getInPlayPredictions(db, match.matchId);
     if (inPlayPredictions.length >= SYSTEM_CONSTANTS.INPLAY_MAX_RECORDS) {
       // SRS: Atomic deletion of oldest record
-      await atomicDeleteOldestInPlay(db, matchId);
+      await atomicDeleteOldestInPlay(db, match.matchId);
       console.log(`[System] Cleaned up oldest in-play record (limit: ${SYSTEM_CONSTANTS.INPLAY_MAX_RECORDS})`);
     }
   }

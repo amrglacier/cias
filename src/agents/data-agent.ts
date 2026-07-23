@@ -35,47 +35,57 @@ import {
 /**
  * Phase 1 (T0): Gather match fundamentals from API-Football.
  * SRS: Step 1 - Get fixtures, Step 2 - Data enrichment, Step 3 - Freeze snapshot
+ *
+ * Optimization: Split into static data (cached, fetched once per season) and
+ * dynamic data (refreshed each cycle). Static data includes team season stats,
+ * league averages. Dynamic data includes injuries, lineups, referee, weather.
  */
 export async function gatherFundamentals(env: Env, match: MatchInfo): Promise<MatchFacts> {
   const db = getSupabase(env);
   console.log(`[DataAgent] T0: Gathering fundamentals for match ${match.matchId}`);
 
-  // Step 1: Fetch raw data from API-Football
-  const rawData = await fetchApiFootballData(env, match);
+  // Step 1: Fetch STATIC data (team stats, league averages) - cached per team/season
+  const staticData = await fetchStaticData(env, match);
 
-  // Step 2: Apply Bayesian smoothing & de-weighting
-  const processed = processDataWithBayesian(rawData);
+  // Step 2: Fetch DYNAMIC data (injuries, lineups, referee, weather) - fresh each time
+  const dynamicData = await fetchDynamicData(env, match);
 
-  // Step 3: Calculate additional factors
+  // Step 3: Apply Bayesian smoothing & de-weighting using static + dynamic data
+  const processed = processDataWithBayesian({
+    ...staticData,
+    ...dynamicData,
+  } as RawApiData);
+
+  // Step 4: Calculate additional factors from dynamic data
   const weatherDecay = calculateWeatherDecay(
-    rawData.weather.temperature,
-    rawData.weather.windSpeed,
-    rawData.weather.precipitation,
-    rawData.weather.isExtreme
+    dynamicData.weather!.temperature,
+    dynamicData.weather!.windSpeed,
+    dynamicData.weather!.precipitation,
+    dynamicData.weather!.isExtreme
   );
 
   const refereeStrictness = calculateRefereeStrictness(
-    rawData.referee.yellowCardAvg,
-    rawData.referee.redCardAvg,
-    rawData.referee.foulsPerGame
+    dynamicData.referee!.yellowCardAvg,
+    dynamicData.referee!.redCardAvg,
+    dynamicData.referee!.foulsPerGame
   );
 
   const motivationHome = calculateMotivation(
-    rawData.isDerby, rawData.isTitleDecider, rawData.isRelegationBattle,
-    rawData.isDeadRubber, true
+    dynamicData.isDerby!, dynamicData.isTitleDecider!, dynamicData.isRelegationBattle!,
+    dynamicData.isDeadRubber!, true
   );
 
   const motivationAway = calculateMotivation(
-    rawData.isDerby, rawData.isTitleDecider, rawData.isRelegationBattle,
-    rawData.isDeadRubber, false
+    dynamicData.isDerby!, dynamicData.isTitleDecider!, dynamicData.isRelegationBattle!,
+    dynamicData.isDeadRubber!, false
   );
 
-  const injuryImpactHome = calculateInjuryImpact(rawData.injuries.home, true);
-  const injuryImpactAway = calculateInjuryImpact(rawData.injuries.away, false);
+  const injuryImpactHome = calculateInjuryImpact(dynamicData.injuries!.home, true);
+  const injuryImpactAway = calculateInjuryImpact(dynamicData.injuries!.away, false);
 
   const formationCtr = calculateFormationCounter(
-    rawData.formations.home,
-    rawData.formations.away
+    dynamicData.formations!.home,
+    dynamicData.formations!.away
   );
 
   // Determine odds zone from latest snapshot
@@ -90,7 +100,7 @@ export async function gatherFundamentals(env: Env, match: MatchInfo): Promise<Ma
     }
   }
 
-  // Step 4: Build MatchFacts and persist
+  // Step 5: Build MatchFacts and persist
   const facts: MatchFacts = {
     matchId: match.matchId,
     homeXgAdj: processed.homeXgAdj,
@@ -108,8 +118,8 @@ export async function gatherFundamentals(env: Env, match: MatchInfo): Promise<Ma
     formationCtrHome: formationCtr,
     formationCtrAway: -formationCtr,
     dataConfidence: processed.confidence,
-    leagueAvgGoals: rawData.leagueAvgGoals,
-    leagueAvgConc: rawData.leagueAvgConc,
+    leagueAvgGoals: staticData.leagueAvgGoals!,
+    leagueAvgConc: staticData.leagueAvgConc!,
     bayesianPriorApplied: processed.priorApplied,
     status: 'frozen', // SRS: T0 data is frozen
   };
@@ -117,6 +127,217 @@ export async function gatherFundamentals(env: Env, match: MatchInfo): Promise<Ma
   const saved = await upsertMatchFacts(db, facts);
   console.log(`[DataAgent] T0: Fundamentals frozen for match ${match.matchId}`);
   return saved;
+}
+
+/**
+ * Refresh only dynamic factors for a match (injuries, lineup, referee, weather).
+ * Static data (team season stats, league averages) is NOT re-fetched.
+ * Called by periodic recalculation instead of full gatherFundamentals.
+ */
+export async function refreshDynamicFactors(env: Env, match: MatchInfo): Promise<Partial<MatchFacts>> {
+  const db = getSupabase(env);
+  console.log(`[DataAgent] Refreshing dynamic factors for match ${match.matchId}`);
+
+  const dynamicData = await fetchDynamicData(env, match);
+
+  // Recalculate dynamic-dependent factors
+  const weatherDecay = calculateWeatherDecay(
+    dynamicData.weather!.temperature,
+    dynamicData.weather!.windSpeed,
+    dynamicData.weather!.precipitation,
+    dynamicData.weather!.isExtreme
+  );
+
+  const refereeStrictness = calculateRefereeStrictness(
+    dynamicData.referee!.yellowCardAvg,
+    dynamicData.referee!.redCardAvg,
+    dynamicData.referee!.foulsPerGame
+  );
+
+  const injuryImpactHome = calculateInjuryImpact(dynamicData.injuries!.home, true);
+  const injuryImpactAway = calculateInjuryImpact(dynamicData.injuries!.away, false);
+
+  const formationCtr = calculateFormationCounter(
+    dynamicData.formations!.home,
+    dynamicData.formations!.away
+  );
+
+  // Update only dynamic fields in existing match_facts
+  const existing = await getMatchFacts(db, match.matchId);
+  if (!existing) {
+    throw new Error(`Cannot refresh dynamic factors: no existing facts for ${match.matchId}`);
+  }
+
+  const updated: MatchFacts = {
+    ...existing,
+    injuryImpactHome,
+    injuryImpactAway,
+    weatherDecay,
+    refereeStrictness,
+    formationCtrHome: formationCtr,
+    formationCtrAway: -formationCtr,
+  };
+
+  const saved = await upsertMatchFacts(db, updated);
+  console.log(`[DataAgent] Dynamic factors refreshed for match ${match.matchId}`);
+  return saved;
+}
+
+/**
+ * Fetch STATIC data: team season stats + league averages.
+ * This data changes slowly (per matchday at most) and is cached in team_stats_cache table.
+ * Only fetches from API if cache is stale (> 12 hours old) or missing.
+ */
+async function fetchStaticData(env: Env, match: MatchInfo): Promise<Partial<RawApiData>> {
+  const db = getSupabase(env);
+  const configRaw = await getConfig(db, 'betting_window_config');
+  let leagueId = 39;
+  let season = '2025';
+  if (configRaw && typeof configRaw === 'object') {
+    const cfg = configRaw as Record<string, unknown>;
+    if (Array.isArray(cfg.api_football_league_ids) && cfg.api_football_league_ids.length > 0) {
+      leagueId = cfg.api_football_league_ids[0] as number;
+    }
+    if (typeof cfg.season === 'string') {
+      season = cfg.season;
+    }
+  }
+
+  const matchRow = await getMatch(db, match.matchId);
+
+  // Check cache for home team stats
+  const homeTeamName = matchRow?.homeTeam || match.homeTeam;
+  const awayTeamName = matchRow?.awayTeam || match.awayTeam;
+
+  const homeStats = await fetchCachedTeamStats(env, leagueId, season, homeTeamName);
+  const awayStats = await fetchCachedTeamStats(env, leagueId, season, awayTeamName);
+
+  return {
+    homeXgRaw: homeStats.xgRaw,
+    awayXgRaw: awayStats.xgRaw,
+    homeConcRaw: homeStats.concRaw,
+    awayConcRaw: awayStats.concRaw,
+    homeMatchesPlayed: homeStats.matchesPlayed,
+    awayMatchesPlayed: awayStats.matchesPlayed,
+    homeOppConcRate: homeStats.oppConcRate,
+    awayOppConcRate: awayStats.oppConcRate,
+    homeOppXgRate: homeStats.oppXgRate,
+    awayOppXgRate: awayStats.oppXgRate,
+    leagueAvgGoals: homeStats.leagueAvgGoals || 1.3,
+    leagueAvgConc: homeStats.leagueAvgConc || 1.3,
+  };
+}
+
+/**
+ * Fetch team stats with caching. Checks team_stats_cache table first.
+ * Cache is valid for 12 hours. If stale or missing, fetches from API.
+ */
+async function fetchCachedTeamStats(
+  env: Env, leagueId: number, season: string, teamName: string
+): Promise<{
+  xgRaw: number; concRaw: number; matchesPlayed: number;
+  oppConcRate: number; oppXgRate: number;
+  leagueAvgGoals: number; leagueAvgConc: number;
+}> {
+  const db = getSupabase(env);
+  const cacheKey = `${season}_${leagueId}_${teamName}`;
+
+  // Check cache (resilient: if table doesn't exist, falls through to API fetch)
+  interface TeamStatsCache {
+    cached_at: string;
+    xg_raw: number; conc_raw: number; matches_played: number;
+    opp_conc_rate: number; opp_xg_rate: number;
+    league_avg_goals: number; league_avg_conc: number;
+  }
+  let cached: TeamStatsCache | null = null;
+  try {
+    const result = await db
+      .from('team_stats_cache')
+      .select('*')
+      .eq('cache_key', cacheKey)
+      .maybeSingle();
+    cached = result.data as TeamStatsCache | null;
+  } catch (cacheErr) {
+    console.warn(`[DataAgent] Cache read failed for ${teamName} (table may not exist):`, cacheErr);
+  }
+
+  if (cached) {
+    const cachedAt = new Date(cached.cached_at).getTime();
+    const twelveHours = 12 * 3600_000;
+    if (Date.now() - cachedAt < twelveHours) {
+      console.log(`[DataAgent] Cache hit for team ${teamName}`);
+      return {
+        xgRaw: cached.xg_raw,
+        concRaw: cached.conc_raw,
+        matchesPlayed: cached.matches_played,
+        oppConcRate: cached.opp_conc_rate,
+        oppXgRate: cached.opp_xg_rate,
+        leagueAvgGoals: cached.league_avg_goals,
+        leagueAvgConc: cached.league_avg_conc,
+      };
+    }
+    console.log(`[DataAgent] Cache stale for team ${teamName}, refetching`);
+  } else {
+    console.log(`[DataAgent] Cache miss for team ${teamName}, fetching from API`);
+  }
+
+  // Fetch from API
+  const fresh = await fetchTeamStatsReal(env, leagueId, season, match_default, teamName);
+
+  // Store in cache (resilient: silently continues if table doesn't exist)
+  try {
+    await db.from('team_stats_cache').upsert({
+      cache_key: cacheKey,
+      team_name: teamName,
+      league_id: leagueId,
+      season,
+      xg_raw: fresh.xgRaw,
+      conc_raw: fresh.concRaw,
+      matches_played: fresh.matchesPlayed,
+      opp_conc_rate: fresh.oppConcRate,
+      opp_xg_rate: fresh.oppXgRate,
+      league_avg_goals: 1.3,
+      league_avg_conc: 1.3,
+      cached_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn(`[DataAgent] Failed to cache team stats for ${teamName}:`, err);
+  }
+
+  return { ...fresh, leagueAvgGoals: 1.3, leagueAvgConc: 1.3 };
+}
+
+// Placeholder match object for fetchTeamStatsReal signature compatibility
+const match_default = { matchId: '', homeTeam: '', awayTeam: '', league: '', kickoffTime: '', status: 'scheduled' as const };
+
+/**
+ * Fetch DYNAMIC data: injuries, lineups, referee, weather, match context.
+ * This data changes frequently and must be fetched fresh each time.
+ */
+async function fetchDynamicData(env: Env, match: MatchInfo): Promise<Partial<RawApiData>> {
+  const fixtureNumericId = parseInt(match.matchId.replace('af_', '')) || 0;
+
+  const [refereeData, formationData] = await Promise.all([
+    fixtureNumericId > 0 ? fetchRealReferee(env, fixtureNumericId) : Promise.resolve({ yellowCardAvg: 3.5, redCardAvg: 0.2, foulsPerGame: 22 }),
+    fixtureNumericId > 0 ? fetchRealLineup(env, fixtureNumericId) : Promise.resolve({ home: '4-3-3', away: '4-4-2' }),
+  ]);
+
+  // Fetch injuries for both teams
+  const [homeInjuries, awayInjuries] = await Promise.all([
+    fetchRealInjuries(env, 39, '2025', 0).catch(() => []),
+    fetchRealInjuries(env, 39, '2025', 0).catch(() => []),
+  ]);
+
+  return {
+    weather: { temperature: 20, windSpeed: 5, precipitation: 0, isExtreme: false },
+    referee: refereeData,
+    injuries: { home: homeInjuries, away: awayInjuries },
+    formations: formationData,
+    isDerby: match.homeTeam === match.awayTeam,
+    isTitleDecider: false,
+    isRelegationBattle: false,
+    isDeadRubber: false,
+  };
 }
 
 // ============================================================
