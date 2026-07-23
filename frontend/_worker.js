@@ -33,6 +33,20 @@ async function supabaseGet(table, query, select = "*") {
   return resp.json();
 }
 
+async function supabasePost(table, body) {
+  const resp = await fetch(`${SB_URL}/rest/v1/${table}`, {
+    method: "POST",
+    headers: {
+      apikey: SB_KEY,
+      Authorization: `Bearer ${SB_KEY}`,
+      "Content-Type": "application/json",
+      Prefer: "return=representation,resolution=merge-duplicates",
+    },
+    body: JSON.stringify(body),
+  });
+  return resp.json();
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -159,6 +173,54 @@ export default {
       return jsonResponse({ key, value: data[0]?.value || {} });
     }
 
+    if (path === "/api/config/betting-window") {
+      if (request.method === "GET") {
+        const data = await supabaseGet(
+          "system_config",
+          { key: "eq.betting_window_config" },
+          "key,value"
+        );
+        return jsonResponse({ config: data[0]?.value || {} });
+      }
+      if (request.method === "POST") {
+        try {
+          const body = await request.json();
+          const { start_hours_before_kickoff, end_minutes_before_kickoff, league_ids, season } = body;
+          if (typeof start_hours_before_kickoff !== "number" || start_hours_before_kickoff < 1 || start_hours_before_kickoff > 72) {
+            return jsonResponse({ error: "start_hours_before_kickoff must be a number between 1 and 72" }, 400);
+          }
+          if (typeof end_minutes_before_kickoff !== "number" || end_minutes_before_kickoff < 0 || end_minutes_before_kickoff > 120) {
+            return jsonResponse({ error: "end_minutes_before_kickoff must be a number between 0 and 120" }, 400);
+          }
+          if (end_minutes_before_kickoff >= start_hours_before_kickoff * 60) {
+            return jsonResponse({ error: "end_minutes_before_kickoff must be less than start_hours_before_kickoff * 60" }, 400);
+          }
+          const configValue = {
+            start_hours_before_kickoff,
+            end_minutes_before_kickoff,
+            league_ids: Array.isArray(league_ids) ? league_ids : [39, 140, 135, 78, 61],
+            season: typeof season === "string" ? season : "2025",
+          };
+          const result = await supabasePost("system_config", {
+            key: "betting_window_config",
+            value: configValue,
+          });
+          return jsonResponse({ success: true, config: configValue, result });
+        } catch (e) {
+          return jsonResponse({ error: e.message }, 500);
+        }
+      }
+    }
+
+    if (path === "/api/upcoming-matches") {
+      const data = await supabaseGet(
+        "matches",
+        { status: "eq.scheduled", order: "kickoff_time.asc", limit: "20" },
+        "match_id,home_team,away_team,league,kickoff_time,status,round,venue"
+      );
+      return jsonResponse({ matches: data || [] });
+    }
+
     if (path === "/api/all-match-facts") {
       const data = await supabaseGet(
         "match_facts",
@@ -248,6 +310,7 @@ export default {
       <div class="tab active" data-tab="predictions">预测结果</div>
       <div class="tab" data-tab="review">复盘看板</div>
       <div class="tab" data-tab="matches">基本面数据</div>
+      <div class="tab" data-tab="fixtures">赛程</div>
       <div class="tab" data-tab="config">系统配置</div>
     </div>
     <div id="tab-predictions" class="tab-content">
@@ -269,7 +332,20 @@ export default {
     <div id="tab-matches" class="tab-content" style="display:none">
       <div id="matches-container"><div class="loading">加载基本面数据...</div></div>
     </div>
+    <div id="tab-fixtures" class="tab-content" style="display:none">
+      <div id="fixtures-container"><div class="loading">加载赛程数据...</div></div>
+    </div>
     <div id="tab-config" class="tab-content" style="display:none">
+      <div class="card">
+        <div class="card-title">购彩时间配置</div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:end;margin-bottom:16px">
+          <div><label style="font-size:12px;color:#666;display:block;margin-bottom:4px">开始购彩 (赛前N小时)</label><input type="number" id="bw-start" min="1" max="72" value="2" style="width:80px"></div>
+          <div><label style="font-size:12px;color:#666;display:block;margin-bottom:4px">截止购彩 (赛前N分钟)</label><input type="number" id="bw-end" min="0" max="120" value="15" style="width:80px"></div>
+          <div><label style="font-size:12px;color:#666;display:block;margin-bottom:4px">赛季</label><input type="text" id="bw-season" value="2025" style="width:80px"></div>
+          <button onclick="saveBettingWindowConfig()">保存</button>
+        </div>
+        <div id="bw-status" style="font-size:12px;color:#666"></div>
+      </div>
       <div class="card">
         <div class="card-title">因子权重配置</div>
         <div id="config-container">加载中...</div>
@@ -289,6 +365,8 @@ export default {
         tab.classList.add('active');
         document.getElementById('tab-' + tab.dataset.tab).style.display = 'block';
         if (tab.dataset.tab === 'matches' && !document.getElementById('matches-container').dataset.loaded) { loadAllMatchFacts(); }
+        if (tab.dataset.tab === 'fixtures' && !document.getElementById('fixtures-container').dataset.loaded) { loadUpcomingMatches(); }
+        if (tab.dataset.tab === 'config' && !document.getElementById('bw-status').dataset.loaded) { loadBettingWindowConfig(); }
       });
     });
     async function checkHealth() {
@@ -376,6 +454,50 @@ export default {
         const config = data.value || {};
         document.getElementById('review-config-container').innerHTML = Object.entries(config).map(([key, value]) => '<div class="factor-item"><span class="factor-id">' + key + '</span><span class="factor-value">' + value + '</span></div>').join('') || '<div class="empty">无配置数据</div>';
       } catch (e) { document.getElementById('review-config-container').innerHTML = '<div class="empty">加载失败: ' + e.message + '</div>'; }
+    }
+    async function loadUpcomingMatches() {
+      try {
+        const resp = await fetch(API_BASE + '/api/upcoming-matches');
+        const data = await resp.json();
+        const matches = data.matches || [];
+        if (matches.length === 0) { document.getElementById('fixtures-container').innerHTML = '<div class="empty">暂无赛程数据（Cron 将自动拉取）</div>'; return; }
+        document.getElementById('fixtures-container').innerHTML = matches.map(m => {
+          const kickoff = m.kickoff_time ? new Date(m.kickoff_time).toLocaleString('zh-CN', {timeZone:'Asia/Shanghai'}) : 'N/A';
+          return '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><div><strong>' + (m.home_team || 'TBD') + '</strong> vs <strong>' + (m.away_team || 'TBD') + '</strong><span style="margin-left:8px;font-size:11px;color:#666">' + (m.league || '') + '</span></div><div style="font-size:11px;color:#666">' + kickoff + '</div></div><div style="margin-top:6px;font-size:12px;color:#888">Match ID: ' + m.match_id + ' | Round: ' + (m.round || '-') + ' | Venue: ' + (m.venue || '-') + ' | Status: ' + m.status + '</div></div>';
+        }).join('');
+        document.getElementById('fixtures-container').dataset.loaded = 'true';
+      } catch (e) { document.getElementById('fixtures-container').innerHTML = '<div class="empty">加载失败: ' + e.message + '</div>'; }
+    }
+    async function loadBettingWindowConfig() {
+      try {
+        const resp = await fetch(API_BASE + '/api/config/betting-window');
+        const data = await resp.json();
+        const cfg = data.config || {};
+        document.getElementById('bw-start').value = cfg.start_hours_before_kickoff ?? 2;
+        document.getElementById('bw-end').value = cfg.end_minutes_before_kickoff ?? 15;
+        document.getElementById('bw-season').value = cfg.season || '2025';
+        document.getElementById('bw-status').textContent = '已加载配置 | 联赛IDs: ' + (cfg.league_ids || [39,140,135,78,61]).join(', ');
+        document.getElementById('bw-status').dataset.loaded = 'true';
+      } catch (e) { document.getElementById('bw-status').textContent = '加载失败: ' + e.message; }
+    }
+    async function saveBettingWindowConfig() {
+      const start = parseInt(document.getElementById('bw-start').value);
+      const end = parseInt(document.getElementById('bw-end').value);
+      const season = document.getElementById('bw-season').value.trim();
+      if (!start || start < 1 || start > 72) { alert('开始购彩时间须为 1-72 小时'); return; }
+      if (isNaN(end) || end < 0 || end > 120) { alert('截止购彩时间须为 0-120 分钟'); return; }
+      if (end >= start * 60) { alert('截止购彩时间须早于开始购彩时间（' + (start*60) + '分钟）'); return; }
+      document.getElementById('bw-status').textContent = '保存中...';
+      try {
+        const resp = await fetch(API_BASE + '/api/config/betting-window', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ start_hours_before_kickoff: start, end_minutes_before_kickoff: end, league_ids: [39,140,135,78,61], season: season || '2025' })
+        });
+        const data = await resp.json();
+        if (data.success) { document.getElementById('bw-status').innerHTML = '<span style="color:#4caf50">保存成功</span> | 开始: 赛前' + start + '小时, 截止: 赛前' + end + '分钟, 赛季: ' + (season || '2025'); }
+        else { document.getElementById('bw-status').innerHTML = '<span style="color:#f44336">保存失败: ' + (data.error || '未知错误') + '</span>'; }
+      } catch (e) { document.getElementById('bw-status').innerHTML = '<span style="color:#f44336">保存失败: ' + e.message + '</span>'; }
     }
     checkHealth();
     loadReviews();

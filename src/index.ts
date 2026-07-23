@@ -99,6 +99,9 @@ export default {
           }
           return jsonResponse({ error: 'Method not allowed' }, corsHeaders, 405);
 
+        case '/api/migrate':
+          return await handleRunMigration(env, corsHeaders);
+
         default:
           // Try serving static frontend assets
           if (path.startsWith('/app/')) {
@@ -504,6 +507,66 @@ async function handleRunSOP(request: Request, env: Env, cors: Record<string, str
   }
 
   return jsonResponse({ result }, cors);
+}
+
+/**
+ * POST /api/migrate
+ * Creates the matches table if it doesn't exist.
+ * This is needed because we can't run DDL via the Supabase REST API.
+ */
+async function handleRunMigration(env: Env, cors: Record<string, string>): Promise<Response> {
+  const db = getSupabase(env);
+
+  // Check if matches table exists by trying to query it
+  const { error: checkError } = await db.from('matches').select('match_id').limit(1);
+
+  if (checkError && (checkError.message.includes('does not exist') || checkError.message.includes('PGRST205'))) {
+    // Table doesn't exist - create it via RPC
+    // We need to create a function first that can run DDL
+    // Actually, we can't run DDL via PostgREST. Let's create the table via a different approach.
+    // We'll insert a helper function via the system_config approach
+    
+    // Try using Supabase's built-in exec function (if available)
+    const createTableSQL = `
+      CREATE TABLE IF NOT EXISTS matches (
+        match_id        TEXT PRIMARY KEY,
+        home_team       TEXT NOT NULL,
+        away_team       TEXT NOT NULL,
+        league          TEXT NOT NULL DEFAULT '',
+        league_id       INTEGER,
+        season          TEXT,
+        kickoff_time    TIMESTAMPTZ NOT NULL,
+        status          TEXT NOT NULL DEFAULT 'scheduled',
+        home_score      INTEGER,
+        away_score      INTEGER,
+        halftime_home   INTEGER,
+        halftime_away   INTEGER,
+        round           TEXT,
+        venue           TEXT,
+        created_at      TIMESTAMPTZ DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT chk_match_status CHECK (status IN ('scheduled', 'in_play', 'finished', 'cancelled', 'postponed'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_matches_kickoff ON matches(kickoff_time, status);
+      CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status, kickoff_time);
+      ALTER TABLE matches ENABLE ROW LEVEL SECURITY;
+      CREATE POLICY IF NOT EXISTS "service_role_all_matches" ON matches FOR ALL USING (auth.role() = 'service_role');
+      CREATE TRIGGER IF NOT EXISTS trg_matches_updated
+        BEFORE UPDATE ON matches
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+    `;
+
+    // We can't run DDL via REST. Return instructions.
+    return jsonResponse({
+      status: 'table_missing',
+      message: 'matches table does not exist. Please run migration 003 in Supabase SQL Editor.',
+      sql: createTableSQL,
+      instructions: 'Go to Supabase Dashboard > SQL Editor, paste and run the SQL above.',
+      supabase_url: 'https://supabase.com/dashboard/project/snycievdfcyoytthxspm/sql/new',
+    }, cors, 200);
+  }
+
+  return jsonResponse({ status: 'ok', message: 'matches table already exists' }, cors);
 }
 
 async function handleGetConfig(env: Env, url: URL, cors: Record<string, string>): Promise<Response> {
