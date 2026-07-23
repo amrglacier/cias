@@ -168,7 +168,229 @@ export default {
       return jsonResponse({ matches: data || [] });
     }
 
-    // Default: not found
-    return jsonResponse({ error: "Not Found", path }, 404);
+    // Serve index.html for root path and non-API paths
+    if (path === '/' || path === '/index.html') {
+      const indexContent = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CIAS - 协同研判自动化系统</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1419; color: #e6e6e6; min-height: 100vh; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    .header { display: flex; justify-content: space-between; align-items: center; padding: 20px 0; border-bottom: 1px solid #2a2a2a; margin-bottom: 24px; }
+    .header h1 { font-size: 24px; color: #4fc3f7; }
+    .header .version { font-size: 12px; color: #666; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 24px; }
+    .tab { padding: 8px 16px; border: 1px solid #333; border-radius: 6px; cursor: pointer; background: #1a1a2e; color: #888; font-size: 14px; transition: all 0.2s; }
+    .tab.active { background: #4fc3f7; color: #0f1419; border-color: #4fc3f7; }
+    .card { background: #1a1a2e; border: 1px solid #2a2a2a; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+    .card-title { font-size: 16px; font-weight: 600; margin-bottom: 12px; color: #4fc3f7; }
+    .prediction-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 16px; }
+    .pred-card { background: #16213e; border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px; position: relative; }
+    .pred-card.locked { border-color: #4caf50; }
+    .pred-card.forced { border-color: #ff9800; }
+    .pred-header { display: flex; justify-content: space-between; margin-bottom: 12px; }
+    .pred-match { font-size: 14px; font-weight: 600; }
+    .pred-version { font-size: 11px; padding: 2px 8px; border-radius: 4px; }
+    .version-INITIAL { background: #1b5e20; color: #a5d6a7; }
+    .version-FINAL { background: #0d47a1; color: #82b1ff; }
+    .pred-direction { font-size: 15px; padding: 8px 12px; background: #0f1419; border-radius: 4px; margin: 8px 0; border-left: 3px solid #4fc3f7; }
+    .pred-scores { display: flex; gap: 12px; margin: 8px 0; }
+    .score-box { flex: 1; background: #0f1419; border-radius: 4px; padding: 8px; }
+    .score-label { font-size: 11px; color: #666; }
+    .score-value { font-size: 18px; font-weight: 700; color: #e6e6e6; }
+    .pred-footer { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: #666; margin-top: 8px; }
+    .badge { padding: 2px 8px; border-radius: 4px; font-size: 10px; }
+    .badge-aligned { background: #1b5e20; color: #a5d6a7; }
+    .badge-forced { background: #bf360c; color: #ffab91; }
+    .badge-pending { background: #37474f; color: #90a4ae; }
+    .review-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+    .stat-box { background: #16213e; border-radius: 8px; padding: 16px; text-align: center; }
+    .stat-value { font-size: 32px; font-weight: 700; color: #4fc3f7; }
+    .stat-label { font-size: 12px; color: #666; margin-top: 4px; }
+    .factors-list { list-style: none; padding: 0; }
+    .factor-item { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #1a1a2e; font-size: 13px; }
+    .factor-id { color: #666; }
+    .factor-value { color: #4fc3f7; font-family: monospace; }
+    .empty { text-align: center; padding: 48px; color: #666; }
+    .loading { text-align: center; padding: 48px; color: #4fc3f7; }
+    input, select, button { background: #0f1419; border: 1px solid #333; color: #e6e6e6; padding: 8px 12px; border-radius: 4px; font-size: 14px; }
+    button { cursor: pointer; background: #4fc3f7; color: #0f1419; border: none; font-weight: 600; }
+    button:hover { background: #29b6f6; }
+    .input-row { display: flex; gap: 8px; margin-bottom: 16px; }
+    .match-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+    .match-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: #16213e; border: 1px solid #2a2a2a; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
+    .match-item:hover { border-color: #4fc3f7; }
+    .match-item.active { border-color: #4fc3f7; background: #1a237e; }
+    .match-id { font-weight: 600; font-size: 14px; }
+    .match-status { font-size: 11px; color: #666; }
+    .odds-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    .odds-table th, .odds-table td { padding: 6px 10px; text-align: center; border-bottom: 1px solid #1a1a2e; font-size: 12px; }
+    .odds-table th { color: #666; }
+    .sharp { color: #ff9800; font-weight: 600; }
+    .steam { color: #f44336; font-weight: 600; }
+    .delta-explain { font-size: 12px; color: #ffcc80; padding: 6px 8px; background: #0f1419; border-radius: 4px; margin-top: 8px; border-left: 2px solid #ff9800; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div>
+        <h1>CIAS - 协同研判自动化系统</h1>
+        <div class="version">V1.4.2-SRS-FULL-PROD</div>
+      </div>
+      <div id="health-status">Loading...</div>
+    </div>
+    <div class="tabs">
+      <div class="tab active" data-tab="predictions">预测结果</div>
+      <div class="tab" data-tab="review">复盘看板</div>
+      <div class="tab" data-tab="matches">基本面数据</div>
+      <div class="tab" data-tab="config">系统配置</div>
+    </div>
+    <div id="tab-predictions" class="tab-content">
+      <div class="input-row">
+        <input type="text" id="match-id-input" placeholder="输入 Match ID (如 EPL-2026-M001)" style="flex:1">
+        <button onclick="loadPrediction()">查询预测</button>
+        <button onclick="loadAllPredictions()" style="background:#1a1a2e;color:#4fc3f7;border:1px solid #4fc3f7">加载全部</button>
+      </div>
+      <div id="predictions-container" class="prediction-grid"><div class="empty">点击「加载全部」查看所有预测，或输入 Match ID 查询</div></div>
+    </div>
+    <div id="tab-review" class="tab-content" style="display:none">
+      <div class="review-grid">
+        <div class="stat-box"><div class="stat-value" id="stat-total">-</div><div class="stat-label">总复盘数</div></div>
+        <div class="stat-box"><div class="stat-value" id="stat-hitrate">-</div><div class="stat-label">命中率 (%)</div></div>
+        <div class="stat-box"><div class="stat-value" id="stat-upsets">-</div><div class="stat-label">冷门数</div></div>
+      </div>
+      <div id="reviews-container"><div class="loading">加载复盘数据...</div></div>
+    </div>
+    <div id="tab-matches" class="tab-content" style="display:none">
+      <div id="matches-container"><div class="loading">加载基本面数据...</div></div>
+    </div>
+    <div id="tab-config" class="tab-content" style="display:none">
+      <div class="card">
+        <div class="card-title">因子权重配置</div>
+        <div id="config-container">加载中...</div>
+      </div>
+      <div class="card">
+        <div class="card-title">复盘配置</div>
+        <div id="review-config-container">加载中...</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    const API_BASE = '';
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
+        tab.classList.add('active');
+        document.getElementById('tab-' + tab.dataset.tab).style.display = 'block';
+        if (tab.dataset.tab === 'matches' && !document.getElementById('matches-container').dataset.loaded) { loadAllMatchFacts(); }
+      });
+    });
+    async function checkHealth() {
+      try { const resp = await fetch(API_BASE + '/api/health'); const data = await resp.json(); document.getElementById('health-status').innerHTML = '<span style="color:' + (data.status === 'healthy' ? '#4caf50' : '#f44336') + '">● ' + (data.status === 'healthy' ? 'Online' : 'Error') + '</span>'; }
+      catch (e) { document.getElementById('health-status').innerHTML = '<span style="color:#f44336">● Offline</span>'; }
+    }
+    async function loadPrediction() {
+      const matchId = document.getElementById('match-id-input').value.trim();
+      if (!matchId) { alert('请输入 Match ID'); return; }
+      document.getElementById('predictions-container').innerHTML = '<div class="loading">查询中...</div>';
+      try {
+        const resp = await fetch(API_BASE + '/api/prediction?matchId=' + matchId);
+        if (!resp.ok) { document.getElementById('predictions-container').innerHTML = '<div class="empty">未找到 Match ID: ' + matchId + ' 的锁定预测</div>'; return; }
+        const data = await resp.json();
+        if (!data.prediction) { document.getElementById('predictions-container').innerHTML = '<div class="empty">未找到 Match ID: ' + matchId + ' 的预测结果</div>'; return; }
+        renderPredictions([data.prediction]);
+        try { const oddsResp = await fetch(API_BASE + '/api/odds-snapshots?matchId=' + matchId); const oddsData = await oddsResp.json(); if (oddsData.snapshots && oddsData.snapshots.length > 0) { renderOdds(oddsData.snapshots); } } catch(e) {}
+      } catch (e) { document.getElementById('predictions-container').innerHTML = '<div class="empty">查询失败: ' + e.message + '</div>'; }
+    }
+    async function loadAllPredictions() {
+      document.getElementById('predictions-container').innerHTML = '<div class="loading">加载中...</div>';
+      try {
+        const resp = await fetch(API_BASE + '/api/all-predictions');
+        const data = await resp.json();
+        if (!data.predictions || data.predictions.length === 0) { document.getElementById('predictions-container').innerHTML = '<div class="empty">暂无预测数据</div>'; return; }
+        renderPredictions(data.predictions);
+      } catch (e) { document.getElementById('predictions-container').innerHTML = '<div class="empty">加载失败: ' + e.message + '</div>'; }
+    }
+    function renderPredictions(predictions) {
+      if (!predictions || predictions.length === 0) { document.getElementById('predictions-container').innerHTML = '<div class="empty">无预测数据</div>'; return; }
+      const html = predictions.map(p => {
+        if (!p) return '';
+        const lockedClass = p.is_lock ? 'locked' : '';
+        const forcedClass = p.alignment_forced_degrade ? 'forced' : '';
+        const versionClass = 'version-' + p.version_tag;
+        const alignBadge = p.alignment_status === 'aligned' ? '<span class="badge badge-aligned">ALIGNED</span>' : p.alignment_forced_degrade ? '<span class="badge badge-forced">FORCED DEGRADE</span>' : '<span class="badge badge-pending">PENDING</span>';
+        const primaryText = p.primary_result === 'home_win' ? '主胜' : p.primary_result === 'draw' ? '平局' : '客胜';
+        const hedgeText = p.hedge_result ? (p.hedge_result === 'home_win' ? '主胜' : p.hedge_result === 'draw' ? '平局' : '客胜') : '无';
+        const factorsHtml = Object.entries(p.key_factors || {}).map(([id, f]) => '<div class="factor-item"><span class="factor-id">' + id + '</span><span class="factor-value">' + (f.value !== null && f.value !== undefined ? f.value.toFixed(3) : 'N/A') + ' (w:' + (f.weight !== null && f.weight !== undefined ? f.weight.toFixed(2) : 'N/A') + ')</span></div>').join('');
+        const deltaHtml = p.delta_explanation ? '<div class="delta-explain">' + p.delta_explanation + '</div>' : '';
+        return '<div class="pred-card ' + lockedClass + ' ' + forcedClass + '"><div class="pred-header"><div class="pred-match">' + p.match_id + '</div><div class="pred-version ' + versionClass + '">' + p.version_tag + '</div></div><div class="pred-direction">' + (p.direction_judgment || 'N/A') + '</div><div class="pred-scores"><div class="score-box"><div class="score-label">主推 (' + primaryText + ')</div><div class="score-value">' + (p.primary_ft || 'N/A') + ' <span style="font-size:12px;color:#666">(' + (p.primary_ht || '-') + ')</span></div></div><div class="score-box"><div class="score-label">备选 (' + hedgeText + ')</div><div class="score-value">' + (p.hedge_ft || 'N/A') + ' <span style="font-size:12px;color:#666">(' + (p.hedge_ht || '-') + ')</span></div></div></div><div class="pred-footer">' + alignBadge + '<span>' + (p.is_lock ? '🔒 LOCKED' : '') + '</span></div>' + deltaHtml + (factorsHtml ? '<details><summary style="cursor:pointer;font-size:12px;color:#666;margin-top:8px">Key Factors (' + Object.keys(p.key_factors || {}).length + ')</summary><ul class="factors-list">' + factorsHtml + '</ul></details>' : '') + '</div>';
+      }).join('');
+      document.getElementById('predictions-container').innerHTML = html;
+    }
+    function renderOdds(snapshots) {
+      const oddsHtml = '<div class="card" style="grid-column: 1 / -1; margin-top: 16px;"><div class="card-title">赔率快照 (' + snapshots.length + ')</div><table class="odds-table"><thead><tr><th>时间</th><th>主胜</th><th>平</th><th>客胜</th><th>信号</th></tr></thead><tbody>' + snapshots.map(s => '<tr><td>' + new Date(s.captured_at).toLocaleString() + '</td><td>' + s.home_odds + '</td><td>' + s.draw_odds + '</td><td>' + s.away_odds + '</td><td>' + (s.is_steam_move ? '<span class="steam">STEAM</span>' : s.is_sharp_move ? '<span class="sharp">SHARP</span>' : '-') + '</td></tr>').join('') + '</tbody></table></div>';
+      document.getElementById('predictions-container').insertAdjacentHTML('beforeend', oddsHtml);
+    }
+    async function loadReviews() {
+      try {
+        const resp = await fetch(API_BASE + '/api/reviews?limit=20');
+        const data = await resp.json();
+        const reviews = data.reviews || [];
+        document.getElementById('stat-total').textContent = reviews.length;
+        document.getElementById('stat-hitrate').textContent = reviews.length > 0 ? ((reviews.filter(r => r.error_type === 'none').length / reviews.length) * 100).toFixed(1) : '0.0';
+        document.getElementById('stat-upsets').textContent = reviews.filter(r => r.is_upset).length;
+        if (reviews.length === 0) { document.getElementById('reviews-container').innerHTML = '<div class="empty">无复盘数据</div>'; return; }
+        document.getElementById('reviews-container').innerHTML = reviews.map(r => {
+          const codeClass = r.attribution_party === 'data' ? 'version-PERIODIC' : 'version-FINAL';
+          const actualText = r.actual_result === 'home_win' ? '主胜' : r.actual_result === 'draw' ? '平局' : '客胜';
+          return '<div class="card"><div style="display:flex;justify-content:space-between"><div><strong>' + r.match_id + '</strong> - <span class="badge ' + codeClass + '">' + r.attribution_code + '</span></div><div style="font-size:11px;color:#666">' + (r.created_at ? new Date(r.created_at).toLocaleString() : '') + '</div></div><div style="margin-top:8px;font-size:13px">' + r.attribution_detail + '</div><div style="margin-top:6px;font-size:12px">实际赛果: <strong>' + actualText + ' ' + r.actual_ft + '</strong> | 归因: <strong>' + r.attribution_party + '</strong> | 错误类型: ' + r.error_type + ' | 冷门: ' + (r.is_upset ? '是' : '否') + '</div></div>';
+        }).join('');
+      } catch (e) { document.getElementById('reviews-container').innerHTML = '<div class="empty">加载失败: ' + e.message + '</div>'; }
+    }
+    async function loadAllMatchFacts() {
+      try {
+        const resp = await fetch(API_BASE + '/api/all-match-facts');
+        const data = await resp.json();
+        const matches = data.matches || [];
+        if (matches.length === 0) { document.getElementById('matches-container').innerHTML = '<div class="empty">无基本面数据</div>'; return; }
+        document.getElementById('matches-container').innerHTML = matches.map(m => '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div class="match-id">' + m.match_id + '</div><div class="match-status">' + m.status + '</div></div><table class="odds-table"><thead><tr><th>指标</th><th>主队</th><th>客队</th></tr></thead><tbody><tr><td>xG (除权)</td><td>' + (m.home_xg_adj ? m.home_xg_adj.toFixed(2) : 'N/A') + '</td><td>' + (m.away_xg_adj ? m.away_xg_adj.toFixed(2) : 'N/A') + '</td></tr><tr><td>失球率 (除权)</td><td>' + (m.home_conc_adj ? m.home_conc_adj.toFixed(2) : 'N/A') + '</td><td>' + (m.away_conc_adj ? m.away_conc_adj.toFixed(2) : 'N/A') + '</td></tr><tr><td>伤停影响</td><td>' + (m.injury_impact_home ? m.injury_impact_home.toFixed(2) : 'N/A') + '</td><td>' + (m.injury_impact_away ? m.injury_impact_away.toFixed(2) : 'N/A') + '</td></tr><tr><td>战意系数</td><td>' + (m.motivation_home ? m.motivation_home.toFixed(2) : 'N/A') + '</td><td>' + (m.motivation_away ? m.motivation_away.toFixed(2) : 'N/A') + '</td></tr><tr><td>阵型克制</td><td>' + (m.formation_ctr_home ? m.formation_ctr_home.toFixed(3) : 'N/A') + '</td><td>' + (m.formation_ctr_away ? m.formation_ctr_away.toFixed(3) : 'N/A') + '</td></tr></tbody></table><div style="margin-top:8px;font-size:12px;color:#666">天气衰减: ' + (m.weather_decay ? m.weather_decay.toFixed(2) : 'N/A') + ' | 裁判严厉度: ' + m.referee_strictness + ' | 赔率区间: ' + (m.odds_zone || 'N/A') + ' | 偏态修正: ' + (m.bias_correction ? m.bias_correction.toFixed(3) : 'N/A') + ' | 数据置信度: ' + (m.data_confidence ? (m.data_confidence * 100).toFixed(0) : 'N/A') + '% | 贝叶斯平滑: ' + (m.bayesian_prior_applied ? '已应用' : '未应用') + '</div></div>').join('');
+        document.getElementById('matches-container').dataset.loaded = 'true';
+      } catch (e) { document.getElementById('matches-container').innerHTML = '<div class="empty">加载失败: ' + e.message + '</div>'; }
+    }
+    async function loadConfig() {
+      try {
+        const resp = await fetch(API_BASE + '/api/config?key=factor_weights');
+        const data = await resp.json();
+        const weights = data.value || {};
+        document.getElementById('config-container').innerHTML = Object.entries(weights).map(([key, value]) => '<div class="factor-item"><span class="factor-id">' + key + '</span><span class="factor-value">' + value + '</span></div>').join('') || '<div class="empty">无配置数据</div>';
+      } catch (e) { document.getElementById('config-container').innerHTML = '<div class="empty">加载失败: ' + e.message + '</div>'; }
+      try {
+        const resp = await fetch(API_BASE + '/api/config?key=review_config');
+        const data = await resp.json();
+        const config = data.value || {};
+        document.getElementById('review-config-container').innerHTML = Object.entries(config).map(([key, value]) => '<div class="factor-item"><span class="factor-id">' + key + '</span><span class="factor-value">' + value + '</span></div>').join('') || '<div class="empty">无配置数据</div>';
+      } catch (e) { document.getElementById('review-config-container').innerHTML = '<div class="empty">加载失败: ' + e.message + '</div>'; }
+    }
+    checkHealth();
+    loadReviews();
+    loadConfig();
+    setInterval(checkHealth, 60000);
+  </script>
+</body>
+</html>`;
+      return new Response(indexContent, { headers: { "Content-Type": "text/html", "Cache-Control": "public, max-age=0, must-revalidate" } });
+    }
+
+    // For non-API paths, try to serve as static
+    if (!path.startsWith('/api/')) {
+      // Return index.html for SPA routing
+      return new Response(indexContent, { headers: { "Content-Type": "text/html", "Cache-Control": "public, max-age=0, must-revalidate" } });
+    }
   },
 };
