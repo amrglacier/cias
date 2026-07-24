@@ -308,6 +308,8 @@ export interface Env {
   // Odds API
   ODDS_API_KEY: string;
   ODDS_API_BASE_URL?: string;
+  // Admin API Key (for authenticating write operations)
+  ADMIN_API_KEY?: string;
   // Notification
   NOTIFY_WEBHOOK_URL?: string;
   // Cloudflare

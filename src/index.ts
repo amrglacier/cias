@@ -18,6 +18,7 @@ import {
   getOddsSnapshotCount, getConfig, setConfig,
   getUpcomingMatches, getFinishedMatchesWithoutReview,
   getMatch, updateMatchStatus,
+  getAllLockedPredictions, getOddsSnapshots, getAllMatchFacts,
 } from './db/repository';
 import {
   mergeBettingWindowConfig, type BettingWindowConfig,
@@ -49,11 +50,17 @@ export default {
       return new Response(null, { headers: corsHeaders });
     }
 
+    // Authenticate write operations (POST/PUT/DELETE)
+    if (request.method !== 'GET') {
+      const authError = requireAuth(request, env, corsHeaders);
+      if (authError) return authError;
+    }
+
     try {
       // API Routes
       switch (path) {
         case '/':
-          return jsonResponse({ status: 'ok', system: 'CIAS', version: '1.4.2' }, corsHeaders);
+          return jsonResponse({ status: 'ok', system: 'CIAS', version: '1.5.0' }, corsHeaders);
 
         case '/api/matches':
           return await handleCreateMatch(request, env, corsHeaders);
@@ -64,14 +71,23 @@ export default {
         case '/api/predictions':
           return await handleGetPredictions(request, env, url, corsHeaders);
 
+        case '/api/all-predictions':
+          return await handleGetAllPredictions(env, url, corsHeaders);
+
         case '/api/prediction':
           return await handleGetPrediction(request, env, url, corsHeaders);
 
         case '/api/match-facts':
           return await handleGetMatchFacts(env, url, corsHeaders);
 
+        case '/api/all-match-facts':
+          return await handleGetAllMatchFacts(env, url, corsHeaders);
+
         case '/api/odds-snapshot':
           return await handleCaptureOdds(request, env, corsHeaders);
+
+        case '/api/odds-snapshots':
+          return await handleGetOddsSnapshots(env, url, corsHeaders);
 
         case '/api/review':
           return await handleReview(request, env, corsHeaders);
@@ -412,6 +428,17 @@ async function handleGetPredictions(request: Request, env: Env, url: URL, cors: 
   return jsonResponse({ prediction }, cors);
 }
 
+/**
+ * GET /api/all-predictions?limit=50
+ * Returns all locked predictions, most recent first.
+ */
+async function handleGetAllPredictions(env: Env, url: URL, cors: Record<string, string>): Promise<Response> {
+  const db = getSupabase(env);
+  const limit = parseInt(url.searchParams.get('limit') || '50');
+  const predictions = await getAllLockedPredictions(db, limit);
+  return jsonResponse({ predictions }, cors);
+}
+
 async function handleGetPrediction(request: Request, env: Env, url: URL, cors: Record<string, string>): Promise<Response> {
   const matchId = url.searchParams.get('matchId');
   if (!matchId) {
@@ -437,6 +464,17 @@ async function handleGetMatchFacts(env: Env, url: URL, cors: Record<string, stri
   return jsonResponse({ facts }, cors);
 }
 
+/**
+ * GET /api/all-match-facts?limit=50
+ * Returns all match facts, most recently updated first.
+ */
+async function handleGetAllMatchFacts(env: Env, url: URL, cors: Record<string, string>): Promise<Response> {
+  const db = getSupabase(env);
+  const limit = parseInt(url.searchParams.get('limit') || '50');
+  const facts = await getAllMatchFacts(db, limit);
+  return jsonResponse({ matches: facts }, cors);
+}
+
 async function handleCaptureOdds(request: Request, env: Env, cors: Record<string, string>): Promise<Response> {
   const body = await request.json() as { matchId: string };
   if (!body.matchId) {
@@ -445,6 +483,22 @@ async function handleCaptureOdds(request: Request, env: Env, cors: Record<string
 
   const result = await captureOddsSnapshot(env, body.matchId);
   return jsonResponse(result, cors);
+}
+
+/**
+ * GET /api/odds-snapshots?matchId=xxx&limit=50
+ * Returns odds snapshots for a match, most recent first.
+ */
+async function handleGetOddsSnapshots(env: Env, url: URL, cors: Record<string, string>): Promise<Response> {
+  const matchId = url.searchParams.get('matchId');
+  if (!matchId) {
+    return jsonResponse({ error: 'matchId required' }, cors, 400);
+  }
+
+  const db = getSupabase(env);
+  const limit = parseInt(url.searchParams.get('limit') || '50');
+  const snapshots = await getOddsSnapshots(db, matchId, limit);
+  return jsonResponse({ snapshots }, cors);
 }
 
 async function handleReview(request: Request, env: Env, cors: Record<string, string>): Promise<Response> {
@@ -669,6 +723,39 @@ async function handleUpdateBettingWindowConfig(
 // ============================================================
 // Helpers
 // ============================================================
+
+/**
+ * Authenticate write operations via Bearer token.
+ * If ADMIN_API_KEY is not set, falls back to allowing all requests
+ * (with a console warning) for backward compatibility during migration.
+ */
+function requireAuth(request: Request, env: Env, corsHeaders: Record<string, string>): Response | null {
+  // If no admin key is configured, warn but allow (migration grace period)
+  if (!env.ADMIN_API_KEY) {
+    console.warn('[Auth] ADMIN_API_KEY not set - write operations are unauthenticated. Set ADMIN_API_KEY via wrangler secret.');
+    return null;
+  }
+
+  const authHeader = request.headers.get('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return jsonResponse(
+      { error: 'Unauthorized: missing or invalid Authorization header. Use: Bearer <token>' },
+      corsHeaders,
+      401
+    );
+  }
+
+  const token = authHeader.slice(7);
+  if (token !== env.ADMIN_API_KEY) {
+    return jsonResponse(
+      { error: 'Unauthorized: invalid token' },
+      corsHeaders,
+      401
+    );
+  }
+
+  return null;
+}
 
 function jsonResponse(data: unknown, cors: Record<string, string>, status: number = 200): Response {
   return new Response(JSON.stringify(data), {

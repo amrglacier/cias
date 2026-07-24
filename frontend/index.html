@@ -119,7 +119,7 @@
     <div class="header">
       <div>
         <h1>CIAS - 协同研判自动化系统</h1>
-        <div class="version">V1.4.2-SRS-FULL-PROD</div>
+        <div class="version">V1.5.0-SRS-FULL-PROD</div>
       </div>
       <div id="health-status">Loading...</div>
     </div>
@@ -188,6 +188,17 @@
     // API calls go to same domain (Pages Functions proxy)
     const API_BASE = '';
 
+    // XSS prevention: escape all dynamic content before inserting into innerHTML
+    function esc(str) {
+      if (str == null) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
     // Tab switching
     document.querySelectorAll('.tab').forEach(tab => {
       tab.addEventListener('click', () => {
@@ -226,13 +237,13 @@
         const resp = await fetch(`${API_BASE}/api/prediction?matchId=${matchId}`);
         if (!resp.ok) {
           document.getElementById('predictions-container').innerHTML =
-            `<div class="empty">未找到 Match ID: ${matchId} 的锁定预测</div>`;
+            `<div class="empty">未找到 Match ID: ${esc(matchId)} 的锁定预测</div>`;
           return;
         }
         const data = await resp.json();
         if (!data.prediction) {
           document.getElementById('predictions-container').innerHTML =
-            `<div class="empty">未找到 Match ID: ${matchId} 的预测结果</div>`;
+            `<div class="empty">未找到 Match ID: ${esc(matchId)} 的预测结果</div>`;
           return;
         }
         renderPredictions([data.prediction]);
@@ -247,7 +258,7 @@
         } catch(e) { /* odds optional */ }
       } catch (e) {
         document.getElementById('predictions-container').innerHTML =
-          `<div class="empty">查询失败: ${e.message}</div>`;
+          `<div class="empty">查询失败: ${esc(e.message)}</div>`;
       }
     }
 
@@ -265,7 +276,7 @@
         renderPredictions(data.predictions);
       } catch (e) {
         document.getElementById('predictions-container').innerHTML =
-          `<div class="empty">加载失败: ${e.message}</div>`;
+          `<div class="empty">加载失败: ${esc(e.message)}</div>`;
       }
     }
 
@@ -292,28 +303,28 @@
           : '无';
 
         const factorsHtml = Object.entries(p.key_factors || {}).map(([id, f]) =>
-          `<div class="factor-item"><span class="factor-id">${id}</span><span class="factor-value">${(f.value !== null && f.value !== undefined) ? f.value.toFixed(3) : 'N/A'} (w:${f.weight !== null && f.weight !== undefined ? f.weight.toFixed(2) : 'N/A'})</span></div>`
+          `<div class="factor-item"><span class="factor-id">${esc(id)}</span><span class="factor-value">${(f.value !== null && f.value !== undefined) ? f.value.toFixed(3) : 'N/A'} (w:${f.weight !== null && f.weight !== undefined ? f.weight.toFixed(2) : 'N/A'})</span></div>`
         ).join('');
 
         const deltaHtml = p.delta_explanation
-          ? `<div class="delta-explain">${p.delta_explanation}</div>`
+          ? `<div class="delta-explain">${esc(p.delta_explanation)}</div>`
           : '';
 
         return `
           <div class="pred-card ${lockedClass} ${forcedClass}">
             <div class="pred-header">
-              <div class="pred-match">${p.match_id}</div>
-              <div class="pred-version ${versionClass}">${p.version_tag}</div>
+              <div class="pred-match">${esc(p.match_id)}</div>
+              <div class="pred-version ${versionClass}">${esc(p.version_tag)}</div>
             </div>
-            <div class="pred-direction">${p.direction_judgment || 'N/A'}</div>
+            <div class="pred-direction">${esc(p.direction_judgment || 'N/A')}</div>
             <div class="pred-scores">
               <div class="score-box">
-                <div class="score-label">主推 (${primaryText})</div>
-                <div class="score-value">${p.primary_ft || 'N/A'} <span style="font-size:12px;color:#666">(${p.primary_ht || '-'})</span></div>
+                <div class="score-label">主推 (${esc(primaryText)})</div>
+                <div class="score-value">${esc(p.primary_ft || 'N/A')} <span style="font-size:12px;color:#666">(${esc(p.primary_ht || '-')})</span></div>
               </div>
               <div class="score-box">
-                <div class="score-label">备选 (${hedgeText})</div>
-                <div class="score-value">${p.hedge_ft || 'N/A'} <span style="font-size:12px;color:#666">(${p.hedge_ht || '-'})</span></div>
+                <div class="score-label">备选 (${esc(hedgeText)})</div>
+                <div class="score-value">${esc(p.hedge_ft || 'N/A')} <span style="font-size:12px;color:#666">(${esc(p.hedge_ht || '-')})</span></div>
               </div>
             </div>
             <div class="pred-footer">
@@ -337,10 +348,10 @@
             <tbody>
               ${snapshots.map(s => `
                 <tr>
-                  <td>${new Date(s.captured_at).toLocaleString()}</td>
-                  <td>${s.home_odds}</td>
-                  <td>${s.draw_odds}</td>
-                  <td>${s.away_odds}</td>
+                  <td>${esc(new Date(s.captured_at).toLocaleString())}</td>
+                  <td>${esc(s.home_odds)}</td>
+                  <td>${esc(s.draw_odds)}</td>
+                  <td>${esc(s.away_odds)}</td>
                   <td>${s.is_steam_move ? '<span class="steam">STEAM</span>' : s.is_sharp_move ? '<span class="sharp">SHARP</span>' : '-'}</td>
                 </tr>
               `).join('')}
@@ -378,14 +389,14 @@
           return `
             <div class="card">
               <div style="display:flex;justify-content:space-between">
-                <div><strong>${r.match_id}</strong> - <span class="badge ${codeClass}">${r.attribution_code}</span></div>
-                <div style="font-size:11px;color:#666">${r.created_at ? new Date(r.created_at).toLocaleString() : ''}</div>
+                <div><strong>${esc(r.match_id)}</strong> - <span class="badge ${codeClass}">${esc(r.attribution_code)}</span></div>
+                <div style="font-size:11px;color:#666">${esc(r.created_at ? new Date(r.created_at).toLocaleString() : '')}</div>
               </div>
-              <div style="margin-top:8px;font-size:13px">${r.attribution_detail}</div>
+              <div style="margin-top:8px;font-size:13px">${esc(r.attribution_detail)}</div>
               <div style="margin-top:6px;font-size:12px">
-                实际赛果: <strong>${actualText} ${r.actual_ft}</strong> | 
-                归因: <strong>${r.attribution_party}</strong> | 
-                错误类型: ${r.error_type} | 
+                实际赛果: <strong>${esc(actualText)} ${esc(r.actual_ft)}</strong> | 
+                归因: <strong>${esc(r.attribution_party)}</strong> | 
+                错误类型: ${esc(r.error_type)} | 
                 冷门: ${r.is_upset ? '是' : '否'}
               </div>
             </div>
@@ -393,7 +404,7 @@
         }).join('');
         document.getElementById('reviews-container').innerHTML = html;
       } catch (e) {
-        document.getElementById('reviews-container').innerHTML = `<div class="empty">加载失败: ${e.message}</div>`;
+        document.getElementById('reviews-container').innerHTML = `<div class="empty">加载失败: ${esc(e.message)}</div>`;
       }
     }
 
@@ -412,8 +423,8 @@
         const html = matches.map(m => `
           <div class="card">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-              <div class="match-id">${m.match_id}</div>
-              <div class="match-status">${m.status}</div>
+              <div class="match-id">${esc(m.match_id)}</div>
+              <div class="match-status">${esc(m.status)}</div>
             </div>
             <table class="odds-table">
               <thead><tr><th>指标</th><th>主队</th><th>客队</th></tr></thead>
@@ -426,11 +437,11 @@
               </tbody>
             </table>
             <div style="margin-top:8px;font-size:12px;color:#666">
-              天气衰减: ${m.weather_decay?.toFixed(2)} | 
-              裁判严厉度: ${m.referee_strictness} | 
-              赔率区间: ${m.odds_zone || 'N/A'} | 
-              偏态修正: ${m.bias_correction?.toFixed(3)} | 
-              数据置信度: ${(m.data_confidence * 100).toFixed(0)}% |
+              天气衰减: ${esc(m.weather_decay?.toFixed(2))} | 
+              裁判严厉度: ${esc(m.referee_strictness)} | 
+              赔率区间: ${esc(m.odds_zone || 'N/A')} | 
+              偏态修正: ${esc(m.bias_correction?.toFixed(3))} | 
+              数据置信度: ${esc((m.data_confidence * 100).toFixed(0))}% |
               贝叶斯平滑: ${m.bayesian_prior_applied ? '已应用' : '未应用'}
             </div>
           </div>
@@ -438,7 +449,7 @@
         document.getElementById('matches-container').innerHTML = html;
         document.getElementById('matches-container').dataset.loaded = 'true';
       } catch (e) {
-        document.getElementById('matches-container').innerHTML = `<div class="empty">加载失败: ${e.message}</div>`;
+        document.getElementById('matches-container').innerHTML = `<div class="empty">加载失败: ${esc(e.message)}</div>`;
       }
     }
 
@@ -449,11 +460,11 @@
         const data = await resp.json();
         const weights = data.value || {};
         const html = Object.entries(weights).map(([key, value]) =>
-          `<div class="factor-item"><span class="factor-id">${key}</span><span class="factor-value">${value}</span></div>`
+          `<div class="factor-item"><span class="factor-id">${esc(key)}</span><span class="factor-value">${esc(value)}</span></div>`
         ).join('');
         document.getElementById('config-container').innerHTML = html || '<div class="empty">无配置数据</div>';
       } catch (e) {
-        document.getElementById('config-container').innerHTML = `<div class="empty">加载失败: ${e.message}</div>`;
+        document.getElementById('config-container').innerHTML = `<div class="empty">加载失败: ${esc(e.message)}</div>`;
       }
 
       // Load review config
@@ -462,11 +473,11 @@
         const data = await resp.json();
         const config = data.value || {};
         const html = Object.entries(config).map(([key, value]) =>
-          `<div class="factor-item"><span class="factor-id">${key}</span><span class="factor-value">${value}</span></div>`
+          `<div class="factor-item"><span class="factor-id">${esc(key)}</span><span class="factor-value">${esc(value)}</span></div>`
         ).join('');
         document.getElementById('review-config-container').innerHTML = html || '<div class="empty">无配置数据</div>';
       } catch (e) {
-        document.getElementById('review-config-container').innerHTML = `<div class="empty">加载失败: ${e.message}</div>`;
+        document.getElementById('review-config-container').innerHTML = `<div class="empty">加载失败: ${esc(e.message)}</div>`;
       }
     }
 

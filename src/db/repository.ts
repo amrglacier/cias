@@ -547,6 +547,42 @@ export async function clearErrorCount(db: SupabaseClient, factorId: string, erro
 }
 
 // ============================================================
+// Bulk queries (for frontend list views)
+// ============================================================
+
+export async function getAllLockedPredictions(db: SupabaseClient, limit: number = 50): Promise<Prediction[]> {
+  const { data, error } = await db
+    .from('predictions')
+    .select('*')
+    .eq('is_lock', true)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`getAllLockedPredictions: ${error.message}`);
+  return (data ?? []).map(mapPrediction);
+}
+
+export async function getOddsSnapshots(db: SupabaseClient, matchId: string, limit: number = 50): Promise<OddsSnapshot[]> {
+  const { data, error } = await db
+    .from('odds_snapshots')
+    .select('*')
+    .eq('match_id', matchId)
+    .order('captured_at', { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`getOddsSnapshots: ${error.message}`);
+  return (data ?? []).map(mapOddsSnapshot);
+}
+
+export async function getAllMatchFacts(db: SupabaseClient, limit: number = 50): Promise<MatchFacts[]> {
+  const { data, error } = await db
+    .from('match_facts')
+    .select('*')
+    .order('updated_at', { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`getAllMatchFacts: ${error.message}`);
+  return (data ?? []).map(mapMatchFacts);
+}
+
+// ============================================================
 // Mapping helpers (DB snake_case -> camelCase)
 // ============================================================
 function mapMatchFacts(d: Record<string, unknown>): MatchFacts {

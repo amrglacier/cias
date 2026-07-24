@@ -44,6 +44,7 @@ REVIEW_ADJUSTMENT_MAX_PERCENT = "10"
 # SUPABASE_SERVICE_KEY
 # API_FOOTBALL_KEY
 # ODDS_API_KEY
+# ADMIN_API_KEY (for authenticating write operations - POST/PUT/DELETE)
 # LLM_API_KEY (for Logic Agent LLM calls - not used in Plan B)
 # LLM_API_BASE
 
