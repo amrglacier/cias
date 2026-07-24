@@ -199,9 +199,12 @@ async function runScheduledFundamentalsAndMonitoring(env: Env): Promise<void> {
   // e.g. if end=15min and lock=15min, final lock triggers at 30min before kickoff
   const finalLockMinutes = config.end_minutes_before_kickoff + config.final_lock_minutes_before_end;
 
-  // Step 4: Process upcoming matches in the pre-match window
+  // Step 4: Process upcoming matches in the pre-match window (parallelized)
   const upcomingMatches = await getUpcomingMatches(db, config.start_hours_before_kickoff + 1);
   const now = new Date();
+
+  // Collect tasks to run in parallel
+  const preMatchTasks: Promise<void>[] = [];
 
   for (const matchRow of upcomingMatches) {
     const kickoff = new Date(matchRow.kickoffTime);
@@ -213,9 +216,11 @@ async function runScheduledFundamentalsAndMonitoring(env: Env): Promise<void> {
     if (hoursBeforeKickoff <= fundamentalsTriggerHours && hoursBeforeKickoff > 0) {
       console.log(`[Cron] Match ${matchRow.matchId} is in fundamentals window (${hoursBeforeKickoff.toFixed(2)}h before kickoff, trigger at ${fundamentalsTriggerHours}h)`);
 
-      // Check if fundamentals already gathered
-      const existingFacts = await getMatchFacts(db, matchRow.matchId);
-      if (!existingFacts) {
+      preMatchTasks.push((async () => {
+        // Check if fundamentals already gathered
+        const existingFacts = await getMatchFacts(db, matchRow.matchId);
+        if (existingFacts) return;
+
         try {
           // Build MatchInfo from match row
           const matchInfo: MatchInfo = {
@@ -241,7 +246,7 @@ async function runScheduledFundamentalsAndMonitoring(env: Env): Promise<void> {
         } catch (err) {
           console.error(`[Cron] Error processing pre-match for ${matchRow.matchId}:`, err);
         }
-      }
+      })());
     }
 
     // Final lock: trigger before the betting end time (e.g. 30min before kickoff)
@@ -249,21 +254,32 @@ async function runScheduledFundamentalsAndMonitoring(env: Env): Promise<void> {
     if (minutesBeforeKickoff <= finalLockMinutes && minutesBeforeKickoff > config.end_minutes_before_kickoff) {
       console.log(`[Cron] Match ${matchRow.matchId} is in final lock window (${minutesBeforeKickoff.toFixed(0)}min before kickoff, lock at ${finalLockMinutes}min)`);
 
-      try {
-        // Check if not already locked
-        const existing = await getLockedPrediction(db, matchRow.matchId);
-        if (!existing) {
+      preMatchTasks.push((async () => {
+        try {
+          // Check if not already locked
+          const existing = await getLockedPrediction(db, matchRow.matchId);
+          if (existing) return;
+
           // Phase 5: Final Publish
           await runPhase5_FinalPublish(env, matchRow.matchId);
           console.log(`[Cron] Phase 5 (Final Publish) complete for ${matchRow.matchId}`);
+        } catch (err) {
+          console.error(`[Cron] Error in final publish for ${matchRow.matchId}:`, err);
         }
-      } catch (err) {
-        console.error(`[Cron] Error in final publish for ${matchRow.matchId}:`, err);
-      }
+      })());
     }
   }
 
-  // Step 5: Process in-play matches (Phase 4)
+  // Run all pre-match tasks in parallel; allSettled ensures one failure doesn't abort others
+  if (preMatchTasks.length > 0) {
+    const results = await Promise.allSettled(preMatchTasks);
+    const rejected = results.filter(r => r.status === 'rejected');
+    if (rejected.length > 0) {
+      console.warn(`[Cron] ${rejected.length}/${results.length} pre-match tasks rejected`);
+    }
+  }
+
+  // Step 5: Process in-play matches (Phase 4) - parallelized
   try {
     const { data: inPlayMatches } = await db
       .from('matches')
@@ -272,7 +288,7 @@ async function runScheduledFundamentalsAndMonitoring(env: Env): Promise<void> {
       .limit(20);
 
     if (inPlayMatches) {
-      for (const m of inPlayMatches) {
+      const inPlayTasks: Promise<void>[] = inPlayMatches.map((m) => (async () => {
         const matchId = m.match_id as string;
         try {
           const matchInfo: MatchInfo = {
@@ -288,6 +304,10 @@ async function runScheduledFundamentalsAndMonitoring(env: Env): Promise<void> {
         } catch (err) {
           console.error(`[Cron] Error in in-play monitoring for ${matchId}:`, err);
         }
+      })());
+
+      if (inPlayTasks.length > 0) {
+        await Promise.allSettled(inPlayTasks);
       }
     }
   } catch (err) {

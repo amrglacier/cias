@@ -27,6 +27,7 @@ import {
   fetchRealTeamStats, fetchRealInjuries, fetchRealLineup,
   fetchRealReferee, fetchRealOdds,
 } from './api-football-fetcher';
+import { fetchWithRetry } from '../utils/http';
 
 // ============================================================
 // T0: Fundamentals Gathering
@@ -639,7 +640,7 @@ async function resolveTeamId(env: Env, leagueId: number, season: string, teamNam
     : { 'x-apisports-key': env.API_FOOTBALL_KEY };
 
   const url = `${baseUrl}/teams?search=${encodeURIComponent(teamName)}`;
-  const resp = await fetch(url, { headers });
+  const resp = await fetchWithRetry(url, { headers });
   if (!resp.ok) return 0;
 
   const data = await resp.json() as { response?: Array<{ team?: { id: number; name: string } }> };
@@ -691,7 +692,7 @@ async function fetchOddsFromApi(env: Env, matchId: string): Promise<{ homeOdds: 
     // Fallback: try the old direct API call (with header-based auth)
     const baseUrl = env.ODDS_API_BASE_URL || 'https://api.the-odds-api.com/v4';
     const url = `${baseUrl}/sports/${sportKey}/odds/?regions=eu&markets=h2h&oddsFormat=decimal`;
-    const resp = await fetch(url, {
+    const resp = await fetchWithRetry(url, {
       headers: { 'x-api-key': env.ODDS_API_KEY },
     });
     if (!resp.ok) throw new Error(`Odds API failed: ${resp.status}`);

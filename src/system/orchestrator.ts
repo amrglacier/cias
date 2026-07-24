@@ -231,7 +231,7 @@ export async function runPhase5_FinalPublish(env: Env, matchId: string): Promise
   }
 
   // SRS: Circuit breaker - T_fuse
-  setTFusePassed();
+  await setTFusePassed(env);
   const cbState = await getCircuitBreakerState(env);
   if (!canWrite(cbState)) {
     throw new Error('Circuit breaker: writes blocked after T_fuse');

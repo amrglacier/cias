@@ -9,6 +9,7 @@ import { getSupabase } from '../db/client';
 import { getConfig, upsertMatch, getMatch } from '../db/repository';
 import { mergeBettingWindowConfig, type BettingWindowConfig } from '../config/defaults';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { fetchWithRetry } from '../utils/http';
 
 interface ApiFootballResponse<T> {
   response: T[];
@@ -116,7 +117,7 @@ export async function fetchAndStoreUpcomingFixtures(env: Env): Promise<number> {
   for (const leagueId of config.api_football_league_ids) {
     const url = `${baseUrl}/fixtures?league=${leagueId}&season=${config.season}&next=10`;
     try {
-      const resp = await fetch(url, { headers });
+      const resp = await fetchWithRetry(url, { headers });
       if (!resp.ok) {
         console.error(`[API-Football] Fixtures for league ${leagueId} failed: ${resp.status}`);
         continue;
@@ -177,7 +178,7 @@ export async function fetchAndStoreFinishedMatches(env: Env): Promise<number> {
   for (const leagueId of config.api_football_league_ids) {
     const url = `${baseUrl}/fixtures?league=${leagueId}&season=${config.season}&from=${yesterday}&to=${today}`;
     try {
-      const resp = await fetch(url, { headers });
+      const resp = await fetchWithRetry(url, { headers });
       if (!resp.ok) continue;
       logRateLimit(env, 'api-football', '/fixtures', resp);
 
@@ -243,7 +244,7 @@ export async function fetchRealTeamStats(
     : { 'x-apisports-key': env.API_FOOTBALL_KEY };
 
   const url = `${baseUrl}/teams/statistics?league=${leagueId}&season=${season}&team=${teamId}`;
-  const resp = await fetch(url, { headers });
+  const resp = await fetchWithRetry(url, { headers });
   if (!resp.ok) throw new Error(`Team stats failed for team ${teamId}: ${resp.status}`);
   logRateLimit(env, 'api-football', '/teams/statistics', resp);
 
@@ -286,7 +287,7 @@ export async function fetchRealInjuries(
     : { 'x-apisports-key': env.API_FOOTBALL_KEY };
 
   const url = `${baseUrl}/injuries?league=${leagueId}&season=${season}&team=${teamId}`;
-  const resp = await fetch(url, { headers });
+  const resp = await fetchWithRetry(url, { headers });
   if (!resp.ok) return [];
   logRateLimit(env, 'api-football', '/injuries', resp);
 
@@ -314,7 +315,7 @@ export async function fetchRealLineup(
     : { 'x-apisports-key': env.API_FOOTBALL_KEY };
 
   const url = `${baseUrl}/fixtures/lineups?fixture=${fixtureId}`;
-  const resp = await fetch(url, { headers });
+  const resp = await fetchWithRetry(url, { headers });
   if (!resp.ok) return { home: '4-3-3', away: '4-4-2' };
   logRateLimit(env, 'api-football', '/fixtures/lineups', resp);
 
@@ -342,7 +343,7 @@ export async function fetchRealReferee(
 
   // Try referee endpoint
   const url = `${baseUrl}/fixtures/referees?fixture=${fixtureId}`;
-  const resp = await fetch(url, { headers });
+  const resp = await fetchWithRetry(url, { headers });
   if (!resp.ok) return { yellowCardAvg: 3.5, redCardAvg: 0.2, foulsPerGame: 22 };
   logRateLimit(env, 'api-football', '/fixtures/referees', resp);
 
@@ -374,7 +375,7 @@ export async function fetchRealOdds(
   // Try to find the matching event in The Odds API
   // Pass API key via header instead of URL query param to avoid logging exposure
   const url = `${baseUrl}/sports/${sportKey}/odds/?regions=eu&markets=h2h&oddsFormat=decimal`;
-  const resp = await fetch(url, {
+  const resp = await fetchWithRetry(url, {
     headers: { 'x-api-key': env.ODDS_API_KEY },
   });
   if (!resp.ok) throw new Error(`Odds API failed: ${resp.status}`);
