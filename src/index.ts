@@ -17,7 +17,7 @@ import {
   getInPlayPredictions, getReviewResults, getRecentReviews,
   getOddsSnapshotCount, getConfig, setConfig,
   getUpcomingMatches, getFinishedMatchesWithoutReview,
-  getMatch, updateMatchStatus,
+  getMatch, updateMatchStatus, upsertMatch,
   getAllLockedPredictions, getOddsSnapshots, getAllMatchFacts,
 } from './db/repository';
 import {
@@ -399,10 +399,25 @@ async function runScheduledReview(env: Env): Promise<void> {
 async function handleCreateMatch(request: Request, env: Env, cors: Record<string, string>): Promise<Response> {
   const body = await request.json() as MatchInfo;
   if (!body.matchId || !body.homeTeam || !body.awayTeam) {
-    return jsonResponse({ error: 'Missing required fields' }, cors, 400);
+    return jsonResponse({ error: 'Missing required fields: matchId, homeTeam, awayTeam' }, cors, 400);
   }
 
-  // Store match info (would insert into a matches table in production)
+  const db = getSupabase(env);
+  await upsertMatch(db, {
+    matchId: body.matchId,
+    homeTeam: body.homeTeam,
+    awayTeam: body.awayTeam,
+    league: body.league || 'Unknown',
+    leagueId: 0,
+    season: new Date().getFullYear().toString(),
+    kickoffTime: body.kickoffTime || new Date().toISOString(),
+    status: body.status || 'scheduled',
+    homeScore: body.homeScore,
+    awayScore: body.awayScore,
+    halftimeHome: body.halftimeHomeScore,
+    halftimeAway: body.halftimeAwayScore,
+  });
+
   return jsonResponse({ status: 'created', matchId: body.matchId }, cors);
 }
 

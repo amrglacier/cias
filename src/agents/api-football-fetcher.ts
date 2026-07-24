@@ -372,8 +372,11 @@ export async function fetchRealOdds(
   const fixtureNumericId = matchId.replace('af_', '');
 
   // Try to find the matching event in The Odds API
-  const url = `${baseUrl}/sports/${sportKey}/odds/?apiKey=${env.ODDS_API_KEY}&regions=eu&markets=h2h&oddsFormat=decimal`;
-  const resp = await fetch(url);
+  // Pass API key via header instead of URL query param to avoid logging exposure
+  const url = `${baseUrl}/sports/${sportKey}/odds/?regions=eu&markets=h2h&oddsFormat=decimal`;
+  const resp = await fetch(url, {
+    headers: { 'x-api-key': env.ODDS_API_KEY },
+  });
   if (!resp.ok) throw new Error(`Odds API failed: ${resp.status}`);
 
   // Log rate limit
