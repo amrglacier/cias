@@ -464,25 +464,39 @@ export async function getUpcomingMatches(db: SupabaseClient, withinHours: number
 }
 
 export async function getFinishedMatchesWithoutReview(db: SupabaseClient, limit: number = 50): Promise<MatchRow[]> {
-  const { data: finished } = await db
+  // Fetch more records than needed because some may have reviews.
+  // The application-layer filter below removes reviewed matches.
+  // TODO: Replace with Postgres `NOT EXISTS` RPC for DB-level filtering.
+  const fetchLimit = Math.max(limit * 5, 200);
+
+  const { data: finished, error: err1 } = await db
     .from('matches')
     .select('*')
     .eq('status', 'finished')
     .order('kickoff_time', { ascending: false })
-    .limit(limit);
+    .limit(fetchLimit);
 
+  if (err1) throw new Error(`getFinishedMatchesWithoutReview: ${err1.message}`);
   if (!finished || finished.length === 0) return [];
 
   const matchIds = finished.map(m => m.match_id);
 
   // Find which of these already have reviews
-  const { data: reviewed } = await db
+  const { data: reviewed, error: err2 } = await db
     .from('review_results')
     .select('match_id')
     .in('match_id', matchIds);
 
+  if (err2) throw new Error(`getFinishedMatchesWithoutReview: ${err2.message}`);
+
   const reviewedSet = new Set((reviewed ?? []).map(r => r.match_id));
-  return finished.filter(m => !reviewedSet.has(m.match_id)).map(mapMatchRow);
+  const result = finished.filter(m => !reviewedSet.has(m.match_id)).slice(0, limit).map(mapMatchRow);
+
+  if (result.length < limit && finished.length === fetchLimit) {
+    console.warn(`[Repository] getFinishedMatchesWithoutReview: may have missed matches. Consider increasing fetchLimit or adding DB-level NOT EXISTS filter.`);
+  }
+
+  return result;
 }
 
 export async function updateMatchStatus(

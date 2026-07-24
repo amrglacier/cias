@@ -424,6 +424,11 @@
       window.scrollTo(0,0);
     }
 
+    function esc(s){
+      if(s==null)return '';
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    }
+
     async function checkHealth(){
       try{
         var r=await fetch(API_BASE+'/api/health');var d=await r.json();var el=document.getElementById('health-status');
@@ -440,9 +445,9 @@
       document.getElementById('predictions-container').innerHTML='<div class="ls"><div class="sp"></div>查询中...</div>';
       try{
         var r=await fetch(API_BASE+'/api/prediction?matchId='+encodeURIComponent(mid));
-        if(!r.ok){document.getElementById('predictions-container').innerHTML='<div class="es"><div class="esi">&#128269;</div><div class="est">未找到 '+mid+' 的锁定预测</div></div>';return}
+        if(!r.ok){document.getElementById('predictions-container').innerHTML='<div class="es"><div class="esi">&#128269;</div><div class="est">未找到 '+esc(mid)+' 的锁定预测</div></div>';return}
         var d=await r.json();
-        if(!d.prediction){document.getElementById('predictions-container').innerHTML='<div class="es"><div class="esi">&#128269;</div><div class="est">未找到 '+mid+' 的预测结果</div></div>';return}
+        if(!d.prediction){document.getElementById('predictions-container').innerHTML='<div class="es"><div class="esi">&#128269;</div><div class="est">未找到 '+esc(mid)+' 的预测结果</div></div>';return}
         renderPredictions([d.prediction]);
         try{var or=await fetch(API_BASE+'/api/odds-snapshots?matchId='+encodeURIComponent(mid));var od=await or.json();if(od.snapshots&&od.snapshots.length>0){renderOdds(od.snapshots)}}catch(e){}
       }catch(e){document.getElementById('predictions-container').innerHTML='<div class="es"><div class="est">查询失败: '+e.message+'</div></div>'}
@@ -460,12 +465,12 @@
     function renderPredictions(ps){
       if(!ps||ps.length===0){document.getElementById('predictions-container').innerHTML='<div class="es"><div class="est">无预测数据</div></div>';return}
       var h=ps.filter(function(p){return p}).map(function(p){
-        var lk=p.is_lock?'lk':'',fd=p.alignment_forced_degrade?'fd':'',vc='v'+p.version_tag;
+        var lk=p.is_lock?'lk':'',fd=p.alignment_forced_degrade?'fd':'',vc='v'+esc(p.version_tag);
         var ab=p.alignment_status==='aligned'?'<span class="bdg ba">ALIGNED</span>':p.alignment_forced_degrade?'<span class="bdg bf">FORCED</span>':'<span class="bdg bp">PENDING</span>';
         var pt=p.primary_result==='home_win'?'主胜':p.primary_result==='draw'?'平局':'客胜';
         var ht=p.hedge_result?(p.hedge_result==='home_win'?'主胜':p.hedge_result==='draw'?'平局':'客胜'):'无';
-        var fh=Object.entries(p.key_factors||{}).map(function(r){var id=r[0],f=r[1];return '<div class="fi2"><span class="fid">'+id+'</span><span class="fval">'+(f.value!=null?f.value.toFixed(3):'N/A')+' (w:'+(f.weight!=null?f.weight.toFixed(2):'N/A')+')</span></div>'}).join('');
-        var dh=p.delta_explanation?'<div class="dx">'+p.delta_explanation+'</div>':'';
+        var fh=Object.entries(p.key_factors||{}).map(function(r){var id=r[0],f=r[1];return '<div class="fi2"><span class="fid">'+esc(id)+'</span><span class="fval">'+(f.value!=null?f.value.toFixed(3):'N/A')+' (w:'+(f.weight!=null?f.weight.toFixed(2):'N/A')+')</span></div>'}).join('');
+        var dh=p.delta_explanation?'<div class="dx">'+esc(p.delta_explanation)+'</div>':'';
 
         // Probability bar from key factors
         var homeProb=0,drawProb=0,awayProb=0;
@@ -476,12 +481,12 @@
         var probBar = homeProb>0||awayProb>0 ? '<div class="prob-bar"><div class="prob-h" style="width:'+homeProb+'%"></div><div class="prob-d" style="width:'+drawProb+'%"></div><div class="prob-a" style="width:'+awayProb+'%"></div></div><div class="prob-labels"><span>主 '+homeProb+'%</span><span>平 '+drawProb+'%</span><span>客 '+awayProb+'%</span></div>' : '';
 
         return '<div class="pc '+lk+' '+fd+'">'+
-          '<div class="ph"><div class="pm">'+p.match_id+'</div><div class="pv '+vc+'">'+p.version_tag+'</div></div>'+
-          '<div class="pd">'+(p.direction_judgment||'N/A')+'</div>'+
+          '<div class="ph"><div class="pm">'+esc(p.match_id)+'</div><div class="pv '+vc+'">'+esc(p.version_tag)+'</div></div>'+
+          '<div class="pd">'+esc(p.direction_judgment||'N/A')+'</div>'+
           probBar+
           '<div class="ps">'+
-            '<div class="sbox"><div class="sl">主推 ('+pt+')</div><div class="sv">'+(p.primary_ft||'N/A')+' <span class="ht">('+(p.primary_ht||'-')+')</span></div></div>'+
-            '<div class="sbox"><div class="sl">备选 ('+ht+')</div><div class="sv">'+(p.hedge_ft||'N/A')+' <span class="ht">('+(p.hedge_ht||'-')+')</span></div></div>'+
+            '<div class="sbox"><div class="sl">主推 ('+pt+')</div><div class="sv">'+esc(p.primary_ft||'N/A')+' <span class="ht">'+esc(p.primary_ht||'-')+'</span></div></div>'+
+            '<div class="sbox"><div class="sl">备选 ('+ht+')</div><div class="sv">'+esc(p.hedge_ft||'N/A')+' <span class="ht">'+esc(p.hedge_ht||'-')+'</span></div></div>'+
           '</div>'+
           '<div class="pf">'+ab+'<span>'+(p.is_lock?'LOCKED':'')+'</span></div>'+
           dh+(fh?'<details><summary>Key Factors ('+Object.keys(p.key_factors||{}).length+')</summary><ul class="fl">'+fh+'</ul></details>':'')+
@@ -494,7 +499,7 @@
       var h='<div class="card"><div class="ct">赔率快照 ('+ss.length+')</div><table class="dt2"><thead><tr><th>时间</th><th>主</th><th>平</th><th>客</th><th>信号</th></tr></thead><tbody>'+
         ss.map(function(s){
           var sig=s.is_steam_move?'<span class="tm">STEAM</span>':s.is_sharp_move?'<span class="ts">SHARP</span>':'-';
-          return '<tr><td>'+new Date(s.captured_at).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})+'</td><td>'+s.home_odds+'</td><td>'+s.draw_odds+'</td><td>'+s.away_odds+'</td><td>'+sig+'</td></tr>';
+          return '<tr><td>'+new Date(s.captured_at).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})+'</td><td>'+esc(s.home_odds)+'</td><td>'+esc(s.draw_odds)+'</td><td>'+esc(s.away_odds)+'</td><td>'+sig+'</td></tr>';
         }).join('')+
         '</tbody></table></div>';
       document.getElementById('predictions-container').insertAdjacentHTML('beforeend',h);
@@ -509,18 +514,18 @@
         if(rv.length===0){document.getElementById('reviews-container').innerHTML='<div class="es"><div class="esi">&#128202;</div><div class="est">暂无复盘数据</div></div>';return}
         document.getElementById('reviews-container').innerHTML=rv.map(function(r){
           var at=r.actual_result==='home_win'?'主胜':r.actual_result==='draw'?'平局':'客胜';
-          var errBadge=r.error_type==='none'?'<span class="bdg ba">CORRECT</span>':'<span class="bdg bf">'+r.error_type.toUpperCase()+'</span>';
+          var errBadge=r.error_type==='none'?'<span class="bdg ba">CORRECT</span>':'<span class="bdg bf">'+esc(r.error_type.toUpperCase())+'</span>';
           return '<div class="card">'+
             '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">'+
-              '<div><strong style="font-size:14px">'+r.match_id+'</strong><br><span class="bdg bp" style="margin-top:4px;display:inline-block">'+r.attribution_code+'</span></div>'+
+              '<div><strong style="font-size:14px">'+esc(r.match_id)+'</strong><br><span class="bdg bp" style="margin-top:4px;display:inline-block">'+esc(r.attribution_code)+'</span></div>'+
               '<div style="font-size:11px;color:var(--text-dim);text-align:right">'+(r.created_at?new Date(r.created_at).toLocaleDateString('zh-CN'):'')+'<br>'+errBadge+'</div>'+
             '</div>'+
-            '<div style="margin-top:10px;font-size:13px;line-height:1.6">'+r.attribution_detail+'</div>'+
-            '<div style="margin-top:8px;font-size:12px;color:var(--text-dim)">实际: <strong style="color:var(--text)">'+at+' '+r.actual_ft+'</strong> | 归因: <strong>'+r.attribution_party+'</strong>'+(r.is_upset?' | <span style="color:var(--danger);font-weight:700">冷门</span>':'')+'</div>'+
+            '<div style="margin-top:10px;font-size:13px;line-height:1.6">'+esc(r.attribution_detail)+'</div>'+
+            '<div style="margin-top:8px;font-size:12px;color:var(--text-dim)">实际: <strong style="color:var(--text)">'+esc(at)+' '+esc(r.actual_ft)+'</strong> | 归因: <strong>'+esc(r.attribution_party)+'</strong>'+(r.is_upset?' | <span style="color:var(--danger);font-weight:700">冷门</span>':'')+'</div>'+
           '</div>';
         }).join('');
         document.getElementById('reviews-container').dataset.loaded='true';
-      }catch(e){document.getElementById('reviews-container').innerHTML='<div class="es"><div class="est">加载失败: '+e.message+'</div></div>'}
+      }catch(e){document.getElementById('reviews-container').innerHTML='<div class="es"><div class="est">加载失败: '+esc(e.message)+'</div></div>'}
     }
 
     async function loadAllMatchFacts(){
@@ -531,8 +536,8 @@
           var confColor=m.data_confidence>0.7?'var(--success)':m.data_confidence>0.4?'var(--warning)':'var(--danger)';
           return '<div class="card">'+
             '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'+
-              '<div style="font-size:14px;font-weight:700">'+m.match_id+'</div>'+
-              '<span class="bdg bp">'+m.status+'</span>'+
+              '<div style="font-size:14px;font-weight:700">'+esc(m.match_id)+'</div>'+
+              '<span class="bdg bp">'+esc(m.status)+'</span>'+
             '</div>'+
             '<table class="dt2"><thead><tr><th>指标</th><th>主队</th><th>客队</th></tr></thead><tbody>'+
               '<tr><td>xG</td><td>'+(m.home_xg_adj?m.home_xg_adj.toFixed(2):'-')+'</td><td>'+(m.away_xg_adj?m.away_xg_adj.toFixed(2):'-')+'</td></tr>'+
@@ -541,26 +546,26 @@
               '<tr><td>战意</td><td>'+(m.motivation_home?m.motivation_home.toFixed(2):'-')+'</td><td>'+(m.motivation_away?m.motivation_away.toFixed(2):'-')+'</td></tr>'+
             '</tbody></table>'+
             '<div style="margin-top:10px;font-size:11px;color:var(--text-dim);line-height:1.6">'+
-              '天气: '+(m.weather_decay?m.weather_decay.toFixed(2):'-')+' | 裁判: '+m.referee_strictness+' | 赔率区间: '+(m.odds_zone||'-')+
+              '天气: '+(m.weather_decay?m.weather_decay.toFixed(2):'-')+' | 裁判: '+esc(m.referee_strictness)+' | 赔率区间: '+esc(m.odds_zone||'-')+
               '<br>置信度: <strong style="color:'+confColor+'">'+(m.data_confidence?(m.data_confidence*100).toFixed(0)+'%':'-')+'</strong>'+
             '</div>'+
           '</div>';
         }).join('');
         document.getElementById('matches-container').dataset.loaded='true';
-      }catch(e){document.getElementById('matches-container').innerHTML='<div class="es"><div class="est">加载失败: '+e.message+'</div></div>'}
+      }catch(e){document.getElementById('matches-container').innerHTML='<div class="es"><div class="est">加载失败: '+esc(e.message)+'</div></div>'}
     }
 
     async function loadConfig(){
       try{
         var r=await fetch(API_BASE+'/api/config?key=factor_weights');var d=await r.json();var w=d.value||{};
         var e1=Object.entries(w);
-        document.getElementById('config-container').innerHTML=e1.length>0?e1.map(function(r){return '<div class="fi2"><span class="fid">'+r[0]+'</span><span class="fval">'+r[1]+'</span></div>'}).join(''):'<div class="es"><div class="est">无配置数据</div></div>';
-      }catch(e){document.getElementById('config-container').innerHTML='<div class="es"><div class="est">加载失败: '+e.message+'</div></div>'}
+        document.getElementById('config-container').innerHTML=e1.length>0?e1.map(function(r){return '<div class="fi2"><span class="fid">'+esc(r[0])+'</span><span class="fval">'+esc(r[1])+'</span></div>'}).join(''):'<div class="es"><div class="est">无配置数据</div></div>';
+      }catch(e){document.getElementById('config-container').innerHTML='<div class="es"><div class="est">加载失败: '+esc(e.message)+'</div></div>'}
       try{
         var r2=await fetch(API_BASE+'/api/config?key=review_config');var d2=await r2.json();var c=d2.value||{};
         var e2=Object.entries(c);
-        document.getElementById('review-config-container').innerHTML=e2.length>0?e2.map(function(r){return '<div class="fi2"><span class="fid">'+r[0]+'</span><span class="fval">'+r[1]+'</span></div>'}).join(''):'<div class="es"><div class="est">无配置数据</div></div>';
-      }catch(e){document.getElementById('review-config-container').innerHTML='<div class="es"><div class="est">加载失败: '+e.message+'</div></div>'}
+        document.getElementById('review-config-container').innerHTML=e2.length>0?e2.map(function(r){return '<div class="fi2"><span class="fid">'+esc(r[0])+'</span><span class="fval">'+esc(r[1])+'</span></div>'}).join(''):'<div class="es"><div class="est">无配置数据</div></div>';
+      }catch(e){document.getElementById('review-config-container').innerHTML='<div class="es"><div class="est">加载失败: '+esc(e.message)+'</div></div>'}
     }
 
     async function loadUpcomingMatches(){
@@ -569,10 +574,10 @@
         if(ms.length===0){document.getElementById('fixtures-container').innerHTML='<div class="es"><div class="esi">&#128197;</div><div class="est">暂无赛程数据<br><span style="font-size:11px;color:var(--text-muted)">Cron 将自动拉取</span></div></div>';return}
         document.getElementById('fixtures-container').innerHTML=ms.map(function(m){
           var ko=m.kickoff_time?new Date(m.kickoff_time).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'TBD';
-          return '<div class="fc"><div class="ft"><div><div class="fte">'+(m.home_team||'TBD')+' <span style="color:var(--text-dim);font-weight:400">vs</span> '+(m.away_team||'TBD')+'</div><div class="ftl">'+(m.league||'')+(m.round?' | R'+m.round:'')+'</div></div><div class="fti">'+ko+'</div></div><div class="fm">'+m.match_id+(m.venue?' | '+m.venue:'')+' | '+m.status+'</div></div>';
+          return '<div class="fc"><div class="ft"><div><div class="fte">'+esc(m.home_team||'TBD')+' <span style="color:var(--text-dim);font-weight:400">vs</span> '+esc(m.away_team||'TBD')+'</div><div class="ftl">'+esc(m.league||'')+(m.round?' | R'+esc(m.round):'')+'</div></div><div class="fti">'+ko+'</div></div><div class="fm">'+esc(m.match_id)+(m.venue?' | '+esc(m.venue):'')+' | '+esc(m.status)+'</div></div>';
         }).join('');
         document.getElementById('fixtures-container').dataset.loaded='true';
-      }catch(e){document.getElementById('fixtures-container').innerHTML='<div class="es"><div class="est">加载失败: '+e.message+'</div></div>'}
+      }catch(e){document.getElementById('fixtures-container').innerHTML='<div class="es"><div class="est">加载失败: '+esc(e.message)+'</div></div>'}
     }
 
     async function loadBettingWindowConfig(){
