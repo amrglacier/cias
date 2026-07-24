@@ -1,6 +1,9 @@
 // ============================================================
 // CIAS - Default Configuration
-// Based on SRS V1.4.2
+// Based on SRS V1.5.0
+// This is the SINGLE SOURCE OF TRUTH for system constants.
+// wrangler.toml [vars] should NOT duplicate these values.
+// Runtime-tunable values should be stored in system_config table (Supabase).
 // ============================================================
 
 export const DEFAULT_FACTOR_WEIGHTS = {

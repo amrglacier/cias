@@ -19,23 +19,14 @@ crons = [
 
 # ============================================================
 # Environment Variables (non-secret)
+# Only runtime environment flags here.
+# System constants (thresholds, limits, etc.) are defined in
+# src/config/defaults.ts (SYSTEM_CONSTANTS) - the single source of truth.
+# Runtime-tunable values are stored in the system_config table (Supabase).
 # ============================================================
 [vars]
 ENVIRONMENT = "production"
 LOG_LEVEL = "info"
-# Match window configuration
-MATCH_WINDOW_PRE_HOURS = "2"
-MATCH_WINDOW_FUSE_MINUTES = "15"
-# API budget thresholds
-API_BUDGET_CRITICAL_PERCENT = "10"
-# In-play record limit
-INPLAY_MAX_RECORDS = "5"
-# Cross-discussion max rounds
-CROSS_DISCUSSION_MAX_ROUNDS = "2"
-# Review system
-REVIEW_HITRATE_THRESHOLD = "30"
-REVIEW_TREND_ERROR_COUNT = "3"
-REVIEW_ADJUSTMENT_MAX_PERCENT = "10"
 
 # Secrets (set via: wrangler secret put <NAME>)
 # See .env.example for details

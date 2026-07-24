@@ -21,6 +21,7 @@ import {
 } from '../db/repository';
 import { getConfig } from '../db/repository';
 import { DEFAULT_FACTOR_WEIGHTS } from '../config/defaults';
+import { buildEvidenceFromFacts } from './shared';
 
 // SRS 2.2: Logic Agent is a pure quantitative engine (Plan B - no LLM)
 // All predictions are computed via mathematical formulas (OWF/K1/Wr)
@@ -45,8 +46,8 @@ export async function produceInitialPrediction(env: Env, matchId: string): Promi
   // Read market signals
   const signals = await getMarketSignals(db, matchId);
 
-  // Build evidence pack
-  const evidence = await buildLogicEvidence(db, matchId, facts);
+  // Build evidence pack (delegates to shared function)
+  const evidence = await buildEvidenceFromFacts(db, matchId, facts);
 
   // Get factor weights from config
   const weights = await getFactorWeights(db);
@@ -145,7 +146,7 @@ export async function periodicRecalculation(env: Env, matchId: string, newSignal
   const allSignals = await getMarketSignals(db, matchId);
 
   // Build evidence
-  const evidence = await buildLogicEvidence(db, matchId, facts);
+  const evidence = await buildEvidenceFromFacts(db, matchId, facts);
   const weights = await getFactorWeights(db);
   const historicalErrorRate = await getHistoricalErrorRate(db);
 
@@ -226,7 +227,7 @@ export async function respondToCrossDiscussion(
   const facts = await getMatchFacts(db, matchId);
   if (!facts) throw new Error(`No match facts for ${matchId}`);
 
-  const evidence = await buildLogicEvidence(db, matchId, facts);
+  const evidence = await buildEvidenceFromFacts(db, matchId, facts);
   const weights = await getFactorWeights(db);
 
   // Re-examine the missing evidence
@@ -266,54 +267,6 @@ export async function respondToCrossDiscussion(
 // ============================================================
 // Internal helpers
 // ============================================================
-
-async function buildLogicEvidence(
-  db: SupabaseClient,
-  matchId: string,
-  facts: MatchFacts
-): Promise<EvidencePack> {
-  const signals = await getMarketSignals(db, matchId);
-
-  const factors: EvidencePack['factors'] = {
-    F1: facts.homeXgAdj,
-    F2: facts.awayXgAdj,
-    F3: facts.homeConcAdj,
-    F4: facts.awayConcAdj,
-    F5: facts.injuryImpactHome,
-    F6: facts.injuryImpactAway,
-    F7: facts.weatherDecay,
-    F8: facts.refereeStrictness,
-    F9: facts.motivationHome,
-    F10: facts.biasCorrection,
-    F13: facts.formationCtrHome,
-  };
-
-  if (signals.some(s => s.signalType === 'sharp_move')) {
-    factors.F11 = 0.04;
-  } else if (signals.some(s => s.signalType === 'steam_move')) {
-    factors.F11 = -0.04;
-  }
-
-  const unadjustedWarning =
-    facts.homeXgAdj === undefined ||
-    facts.awayXgAdj === undefined ||
-    facts.homeConcAdj === undefined ||
-    facts.awayConcAdj === undefined;
-
-  return {
-    matchId,
-    factors,
-    rawData: {
-      leagueAvgGoals: facts.leagueAvgGoals,
-      leagueAvgConc: facts.leagueAvgConc,
-      bayesianPriorApplied: facts.bayesianPriorApplied,
-    },
-    confidence: facts.dataConfidence,
-    unadjustedWarning,
-    collectedAt: new Date().toISOString(),
-    notes: unadjustedWarning ? ['Unadjusted data - confidence downgrade'] : [],
-  };
-}
 
 async function getFactorWeights(db: SupabaseClient): Promise<FactorWeights> {
   const configValue = await getConfig(db, 'factor_weights');

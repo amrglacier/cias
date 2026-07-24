@@ -7,6 +7,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type {
   MatchFacts, OddsSnapshot, MarketSignal, Prediction,
   ReviewResult, WeightAdjustment, ApiUsage,
+  MatchResult, VersionTag, AlignmentStatus,
+  LogicTrace, KeyFactorMap, CrossDiscussionEntry,
+  AttributionCode,
 } from '../types';
 import { SYSTEM_CONSTANTS } from '../config/defaults';
 
@@ -672,12 +675,6 @@ function mapPrediction(d: Record<string, unknown>): Prediction {
   };
 }
 
-// Type imports for mappers
-import type {
-  MatchResult, VersionTag, AlignmentStatus,
-  LogicTrace, KeyFactorMap, CrossDiscussionEntry,
-} from '../types';
-
 function mapReviewResult(d: Record<string, unknown>): ReviewResult {
   return {
     id: d.id as number,
@@ -694,5 +691,3 @@ function mapReviewResult(d: Record<string, unknown>): ReviewResult {
     createdAt: d.created_at as string,
   };
 }
-
-import type { AttributionCode } from '../types';
